@@ -1,7 +1,7 @@
 // src/worker.js
 import * as jwt from '@tsndr/cloudflare-worker-jwt';
 
-// --- 完整的内嵌前端 HTML/JS (已更新 handleImageUpload 函数) ---
+// --- 完整的内嵌前端 HTML/JS (已更新 handleImageUpload 函数和图片链接) ---
 const FRONTEND_HTML = `
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -72,11 +72,17 @@ const FRONTEND_HTML = `
             background-color: #e9ecef; 
             font-weight: bold;
         }
+        /* 🚨 优化图片样式，确保图片可点击 */
         .material-img { 
             max-width: 50px; 
             max-height: 50px; 
             object-fit: cover;
             border-radius: 4px;
+            cursor: pointer; /* 提示用户可以点击 */
+            transition: opacity 0.3s;
+        }
+        .material-img:hover {
+            opacity: 0.8;
         }
         .upload-controls {
             display: flex;
@@ -574,10 +580,10 @@ const FRONTEND_HTML = `
                 // 移除不必要的字段，只保留需要传给 handleEdit 的数据
                 const cleanMat = JSON.stringify(mat).replace(/'/g, "\\\\'"); // 确保字符串可以作为JS参数传递
                 
-                // 图片单元格
+                // 🚨 图片单元格更新：添加 <a> 标签以便点击查看大图
                 const imgCell = row.insertCell();
                 if (mat.image_url) {
-                    imgCell.innerHTML = \`<img src="\${mat.image_url}" class="material-img" alt="\${mat.unified_name}">\`;
+                    imgCell.innerHTML = \`<a href="\${mat.image_url}" target="_blank"><img src="\${mat.image_url}" class="material-img" alt="\${mat.unified_name}"></a>\`;
                 } else {
                     imgCell.textContent = '-';
                 }
