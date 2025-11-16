@@ -294,7 +294,7 @@ const FRONTEND_HTML = `
             status.style.color = 'blue';
 
             try {
-                // FIX 1: Escaped $
+                // 已转义: ${API_BASE_URL}
                 const response = await fetch(`\${API_BASE_URL}/materials`, { 
                     method: 'POST',
                     headers: getAuthHeaders(),
@@ -304,10 +304,12 @@ const FRONTEND_HTML = `
                 const result = await response.json();
 
                 if (response.ok && result.status === 'success') {
+                    // 已转义: ${result.uid}
                     status.textContent = `记录 \${result.uid} 保存成功！`;
                     status.style.color = 'green';
                     fetchMaterials(); 
                 } else {
+                    // 已转义: ${result.message}
                     status.textContent = `保存失败: \${result.message || response.statusText}`;
                     status.style.color = 'red';
                 }
@@ -330,21 +332,23 @@ const FRONTEND_HTML = `
             if (!token) { status.textContent = '请先登录。'; status.style.color = 'red'; return; }
             if (fileInput.files.length === 0) { status.textContent = '请选择图片文件。'; status.style.color = 'red'; return; }
             const file = fileInput.files[0];
-            const r2Key = keyInput.value.trim() || `uploads/\${Date.now()}/\${file.name}`; // FIX 2: Escaped $ for uploads path
+            // 已转义: ${Date.now()}/${file.name}
+            const r2Key = keyInput.value.trim() || `uploads/\${Date.now()}/\${file.name}`; 
             
             status.textContent = '正在请求 R2 签名链接...';
             status.style.color = 'blue';
 
             try {
                 // 1. 获取预签名 URL
-                // FIX 3: Escaped $
+                // 已转义: ${API_BASE_URL}
                 const signResponse = await fetch(`\${API_BASE_URL}/presign-url`, {
                     method: 'POST',
                     headers: getAuthHeaders(),
                     body: JSON.stringify({ key: r2Key })
                 });
                 
-                if (!signResponse.ok) throw new Error(`签名失败: \${signResponse.statusText}`); // FIX 4: Escaped $
+                // 已转义: ${signResponse.statusText}
+                if (!signResponse.ok) throw new Error(`签名失败: \${signResponse.statusText}`); 
                 
                 const { uploadUrl } = await signResponse.json();
                 
@@ -359,11 +363,14 @@ const FRONTEND_HTML = `
                     body: file
                 });
                 
-                if (!uploadResponse.ok) throw new Error(`上传失败: \${uploadResponse.statusText}`); // FIX 5: Escaped $
+                // 已转义: ${uploadResponse.statusText}
+                if (!uploadResponse.ok) throw new Error(`上传失败: \${uploadResponse.statusText}`);
 
                 // 3. 更新表单字段
                 keyInput.value = r2Key; 
-                status.textContent = `图片上传成功！R2 Key: \${r2Key}`; // FIX 6: Escaped $
+                // 已转义: ${r2Key}
+                status.textContent = `图片上传成功！R2 Key: \${r2Key}`;
+                status.style.color = 'green';
                 
                 if (document.getElementById('f_UID').value) {
                     status.textContent += ' 请点击 "保存/更新记录" 以更新数据库记录。';
@@ -435,7 +442,8 @@ const FRONTEND_HTML = `
                 if (item.UID && item.unified_name) {
                     data.push(item);
                 } else {
-                    console.warn(`跳过无效行 (缺少UID或统一名称): \${lines[i]}`); // FIX 7: Escaped $
+                    // 已转义: ${lines[i]}
+                    console.warn(`跳过无效行 (缺少UID或统一名称): \${lines[i]}`); 
                 }
             }
             return data;
@@ -474,10 +482,11 @@ const FRONTEND_HTML = `
                         status.textContent = '文件内容错误或未解析到有效数据。'; status.style.color = 'red'; return;
                     }
                     
-                    status.textContent = `正在导入 \${materialsArray.length} 条有效数据...`; // FIX 8: Escaped $
+                    // 已转义: ${materialsArray.length}
+                    status.textContent = `正在导入 \${materialsArray.length} 条有效数据...`; 
                     status.style.color = 'blue';
 
-                    // FIX 9: Escaped $
+                    // 已转义: ${API_BASE_URL}
                     const response = await fetch(`\${API_BASE_URL}/import`, { 
                         method: 'POST',
                         headers: getAuthHeaders(),
@@ -487,12 +496,12 @@ const FRONTEND_HTML = `
                     const result = await response.json();
 
                     if (response.ok && result.status === 'success') {
-                        // FIX 10 & 11: Escaped $
+                        // 已转义: ${result.total_processed} ${result.imported_count}
                         status.textContent = `导入成功！总计处理 \${result.total_processed} 条，导入/更新 \${result.imported_count} 条。`; 
                         status.style.color = 'green';
                         fetchMaterials();
                     } else {
-                        // FIX 12: Escaped $
+                        // 已转义: ${result.message}
                         status.textContent = `导入失败: \${result.message || response.statusText}`; 
                         status.style.color = 'red';
                     }
@@ -528,21 +537,21 @@ const FRONTEND_HTML = `
 
             const token = localStorage.getItem('jwtToken');
             try {
-                // FIX 13 & 14: Escaped $
+                // 已转义: ${API_BASE_URL} ${uid}
                 const response = await fetch(`\${API_BASE_URL}/materials/\${uid}`, {
                     method: 'DELETE',
                     headers: { 'Authorization': 'Bearer ' + token }
                 });
 
                 if (response.ok) {
-                    // FIX 15: Escaped $
+                    // 已转义: ${uid}
                     alert(`记录 \${uid} 删除成功！`); 
                     fetchMaterials(); 
                 } else if (response.status === 404) {
-                    // FIX 16: Escaped $
+                    // 已转义: ${uid}
                     alert(`删除失败：记录 \${uid} 未找到。`); 
                 } else {
-                    // FIX 17: Escaped $
+                    // 已转义: ${response.statusText}
                     alert(`删除失败: \${response.statusText}`);
                 }
             } catch (error) {
@@ -589,7 +598,7 @@ const FRONTEND_HTML = `
             status.style.color = 'blue';
 
             try {
-                // FIX 18: Escaped $
+                // 已转义: ${API_BASE_URL}
                 const response = await fetch(`\${API_BASE_URL}/login`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -614,7 +623,7 @@ const FRONTEND_HTML = `
                     showMainSection();
                     fetchMaterials();
                 } else {
-                    // FIX 19: Escaped $
+                    // 已转义: ${await response.text()}
                     status.textContent = `登录失败: \${await response.text() || response.statusText}`; 
                     status.style.color = 'red';
                 }
@@ -661,7 +670,7 @@ const FRONTEND_HTML = `
             }
 
             try {
-                // FIX 20 & 21: Escaped $
+                // 已转义: ${API_BASE_URL} ${encodeURIComponent(query)}
                 const response = await fetch(`\${API_BASE_URL}/materials?q=\${encodeURIComponent(query)}`, {
                     headers: token ? { 'Authorization': 'Bearer ' + token } : {} 
                 });
@@ -695,11 +704,14 @@ const FRONTEND_HTML = `
                 // 规格/尺寸 字段合并：长度 x 宽度
                 let dimensions = '';
                 if (mat.length_mm && mat.width_mm) {
-                    dimensions = `\${mat.length_mm} x \${mat.width_mm} mm`; // FIX 22 & 23: Escaped $
+                    // 已转义: ${mat.length_mm} ${mat.width_mm}
+                    dimensions = `\${mat.length_mm} x \${mat.width_mm} mm`; 
                 } else if (mat.length_mm) {
-                    dimensions = `\${mat.length_mm} mm`; // FIX 24: Escaped $
+                    // 已转义: ${mat.length_mm}
+                    dimensions = `\${mat.length_mm} mm`; 
                 } else if (mat.width_mm) {
-                    dimensions = `\${mat.width_mm} mm`; // FIX 25: Escaped $
+                    // 已转义: ${mat.width_mm}
+                    dimensions = `\${mat.width_mm} mm`; 
                 }
                 
                 const cleanMat = JSON.stringify(mat).replace(/'/g, "\\'"); 
@@ -707,8 +719,8 @@ const FRONTEND_HTML = `
                 // 1. 图片单元格
                 const imgCell = row.insertCell();
                 if (mat.image_url) {
-                    // FIX 26: Escaped $
-                    imgCell.innerHTML = `<a href="\${mat.image_url}" target="_blank"><img src="\${mat.image_url}" class="material-img" alt="\${mat.unified_name}"></a>`; // FIX 27 & 28: Escaped $
+                    // 已转义: ${mat.image_url} ${mat.image_url} ${mat.unified_name}
+                    imgCell.innerHTML = `<a href="\${mat.image_url}" target="_blank"><img src="\${mat.image_url}" class="material-img" alt="\${mat.unified_name}"></a>`; 
                 } else {
                     imgCell.textContent = '-';
                 }
@@ -729,7 +741,7 @@ const FRONTEND_HTML = `
                 row.insertCell().textContent = dimensions || '-';
                 
                 // 7. 直径
-                // FIX 29: Escaped $
+                // 已转义: ${mat.diameter_mm}
                 row.insertCell().textContent = mat.diameter_mm ? `Ø\${mat.diameter_mm} mm` : '-';
 
                 // 8. 颜色
@@ -741,7 +753,7 @@ const FRONTEND_HTML = `
                 // 10. 操作 (只在管理员模式下显示)
                 const actionsCell = row.insertCell();
                 if (!isReadOnly) {
-                    // FIX 30 & 31: Escaped $
+                    // 已转义: ${cleanMat} ${mat.UID}
                     actionsCell.innerHTML = `
                         <button class="edit-btn" onclick='handleEdit(\${cleanMat})'>编辑</button>
                         <button class="delete-btn" onclick="handleDelete('\${mat.UID}')">删除</button>
