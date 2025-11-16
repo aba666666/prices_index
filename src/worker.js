@@ -619,6 +619,7 @@ const FRONTEND_HTML = `
 
 // ⚠️ 密码比较占位：用于生产环境，与 schema.sql 保持一致
 async function comparePassword(password, storedHash, env) {
+    // 假设您的 D1 数据库中存储的是 'testpass' 
     return password === storedHash;
 }
 
@@ -709,7 +710,7 @@ async function handleLogin(request, env) {
 async function handleGeneratePresignedUrl(request, env) {
     const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
 
-    // 🚨 使用新的绑定名称 R2_STORAGE
+    // 🚨 检查新的绑定名称 R2_STORAGE
     if (!env.R2_STORAGE) {
         // 如果绑定完全丢失，则返回此信息
         return new Response(JSON.stringify({ 
@@ -740,14 +741,13 @@ async function handleGeneratePresignedUrl(request, env) {
         });
         
     } catch (e) {
-        // --- 捕获错误并返回关键调试信息 ---
+        // 返回调试信息，帮助确认绑定是否正确
         let debugInfo = `R2_STORAGE object type: ${typeof env.R2_STORAGE}. `;
         debugInfo += `Does it have createPresignedUrl? ${typeof env.R2_STORAGE.createPresignedUrl}`;
-        // ---------------------------------
         
         return new Response(JSON.stringify({ 
-            message: `Failed to generate presigned URL: ${e.message}. The R2 binding is corrupted in the runtime.`,
-            debug: debugInfo // 返回调试信息
+            message: `Failed to generate presigned URL: ${e.message}.`,
+            debug: debugInfo
         }), { 
             status: 500,
             headers
@@ -760,11 +760,13 @@ async function handleCreateUpdateMaterial(request, env) {
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
-    // ... (D1 逻辑不变)
+
     const mat = await request.json();
+
     if (!mat.UID || !mat.unified_name) {
         return new Response(JSON.stringify({ message: 'Missing required fields: UID and unified_name' }), { status: 400 });
     }
+
     try {
         const stmt = env.DB.prepare(`
             INSERT OR REPLACE INTO materials 
@@ -776,10 +778,13 @@ async function handleCreateUpdateMaterial(request, env) {
             mat.length_mm, mat.width_mm, mat.diameter_mm, 
             mat.r2_image_key || null
         );
+
         await stmt.run();
+
         return new Response(JSON.stringify({ status: 'success', message: 'Material saved/updated.', uid: mat.UID }), {
             headers: { 'Content-Type': 'application/json' }
         });
+
     } catch (e) {
         console.error("Save/Update error:", e);
         return new Response(JSON.stringify({ message: `Save/Update Failed: ${e.message}` }), { status: 500 });
@@ -789,10 +794,8 @@ async function handleCreateUpdateMaterial(request, env) {
 
 async function handleQueryMaterials(request, env) {
     if (!env.DB) {
-        // ... (错误处理)
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
-    // ... (D1 逻辑不变)
     try {
         const url = new URL(request.url);
         const query = url.searchParams.get('q') || '';
@@ -894,7 +897,6 @@ async function handleDeleteMaterial(request, env) {
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
-    // ... (D1 逻辑不变)
     const url = new URL(request.url);
     const parts = url.pathname.split('/');
     const uid = parts[parts.length - 1]; 
@@ -939,7 +941,7 @@ export default {
         };
 
         if (method === 'OPTIONS') {
-            return new Response(null, { headers });
+            return new Response(null, { headers: { ...headers, 'Content-Type': undefined } });
         }
 
         if (path === '/' && method === 'GET') {
@@ -973,7 +975,7 @@ export default {
             
             // POST /api/presign-url (R2 Upload)
             if (path === '/api/presign-url' && method === 'POST') {
-                return handleGeneratePresignedUrl(request, env); // 🚨 调用修复后的函数
+                return handleGeneratePresignedUrl(request, env); 
             }
 
             // POST /api/import (Bulk Import)
