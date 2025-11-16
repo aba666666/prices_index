@@ -1,7 +1,7 @@
 // src/worker.js
 import * as jwt from '@tsndr/cloudflare-worker-jwt';
 
-// --- 完整的内嵌前端 HTML/JS (已更新 handleImageUpload 函数和图片链接) ---
+// --- 完整的内嵌前端 HTML/JS (已更新布局和访客逻辑) ---
 const FRONTEND_HTML = `
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -72,7 +72,7 @@ const FRONTEND_HTML = `
             background-color: #e9ecef; 
             font-weight: bold;
         }
-        /* 🚨 优化图片样式，确保图片可点击 */
+        /* 优化图片样式，确保图片可点击 */
         .material-img { 
             max-width: 50px; 
             max-height: 50px; 
@@ -89,6 +89,13 @@ const FRONTEND_HTML = `
             gap: 5px;
             align-items: center;
         }
+        .readonly-mode {
+            background-color: #ffffe0; /* 浅黄色背景提示只读 */
+            padding: 10px;
+            margin-bottom: 20px;
+            border-left: 5px solid #ffc107;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
@@ -99,13 +106,18 @@ const FRONTEND_HTML = `
         <input type="text" id="username" value="test" placeholder="用户名">
         <input type="password" id="password" value="testpass" placeholder="密码">
         <button onclick="handleLogin()">登录</button>
+        <button onclick="handleViewAsGuest()">以访客身份查看 (只读)</button>
         <p id="login-status" style="color: red;"></p>
     </div>
     
     <hr>
     
     <div id="main-section" style="display:none;">
-        <button onclick="handleLogout()" style="float: right; background-color: #dc3545;">退出登录</button>
+        <div id="read-only-notice" class="readonly-mode" style="display:none;">
+            您当前处于访客模式（只读）。所有编辑、删除、上传和导入功能已被禁用。
+            <button onclick="handleLogout()" style="background-color: #007bff; margin-left: 20px;">返回登录</button>
+        </div>
+        <button onclick="handleLogout()" id="logout-btn" style="float: right; background-color: #dc3545;">退出登录</button>
         
         <div id="manual-section">
             <h2>📝 手动创建 / 编辑记录 <button onclick="resetManualForm()" style="background-color: #17a2b8;">清空表单</button></h2>
@@ -120,7 +132,7 @@ const FRONTEND_HTML = `
                         <input type="text" id="f_unified_name" name="unified_name" required>
                     </div>
                     <div class="form-group">
-                        <label for="f_material_type">材质</label>
+                        <label for="f_material_type">材质 (大类)</label>
                         <input type="text" id="f_material_type" name="material_type">
                     </div>
                     <div class="form-group">
@@ -160,7 +172,7 @@ const FRONTEND_HTML = `
                         <div class="upload-controls">
                             <input type="text" id="f_r2_image_key" name="r2_image_key" placeholder="例如: folder/image.jpg" style="width: 60%; margin: 0;">
                             <input type="file" id="f_image_file" accept="image/*" style="width: 40%; margin: 0;">
-                            <button type="button" onclick="handleImageUpload()" style="flex-shrink: 0; padding: 5px 10px;">上传图片</button>
+                            <button type="button" onclick="handleImageUpload()" id="upload-btn" style="flex-shrink: 0; padding: 5px 10px;">上传图片</button>
                         </div>
                     </div>
                 </div>
@@ -172,24 +184,28 @@ const FRONTEND_HTML = `
         <div id="import-section">
             <h2>📤 批量导入 (支持 CSV / JSON)</h2>
             <input type="file" id="import-file" accept=".json, .csv">
-            <button onclick="handleBulkImport()">解析并导入数据</button>
+            <button onclick="handleBulkImport()" id="import-btn">解析并导入数据</button>
             <p id="import-status" style="color: blue;"></p>
         </div>
 
         <div id="query-section">
             <h2>🔍 材料查询与管理</h2>
-            <input type="text" id="search-query" placeholder="输入名称、别名或小类进行查询" style="width: 400px;">
+            <input type="text" id="search-query" placeholder="输入名称、型号或UID进行查询" style="width: 400px;">
             <button onclick="fetchMaterials()">查询</button>
             
             <table id="results-table">
                 <thead>
                     <tr>
                         <th style="width: 5%;">图片</th>
-                        <th style="width: 15%;">唯一识别码 (UID)</th>
-                        <th style="width: 25%;">名称 / 型号 / 尺寸</th>
-                        <th style="width: 25%;">小类 / 材质 / 颜色</th>
-                        <th style="width: 10%;">图片 Key</th>
-                        <th style="width: 15%;">操作</th>
+                        <th style="width: 15%;">统一名称</th>
+                        <th style="width: 10%;">材质(大类)</th>
+                        <th style="width: 10%;">小类</th>
+                        <th style="width: 10%;">型号</th>
+                        <th style="width: 10%;">规格/尺寸</th>
+                        <th style="width: 10%;">直径</th>
+                        <th style="width: 10%;">颜色</th>
+                        <th style="width: 10%;">唯一识别码(UID)</th>
+                        <th id="actions-header" style="width: 10%;">操作</th>
                     </tr>
                 </thead>
                 <tbody id="results-body">
@@ -201,14 +217,47 @@ const FRONTEND_HTML = `
     <script>
         const API_BASE_URL = '/api'; 
         const FIELD_NAMES = ["UID", "unified_name", "material_type", "sub_category", "alias", "color", "model_number", "length_mm", "width_mm", "diameter_mm", "r2_image_key"];
+        let isReadOnly = false;
 
         window.onload = function() {
-            if (localStorage.getItem('jwtToken')) {
-                document.getElementById('auth-section').style.display = 'none';
-                document.getElementById('main-section').style.display = 'block';
+            const token = localStorage.getItem('jwtToken');
+            const guest = localStorage.getItem('isGuest');
+
+            if (token) {
+                // 已登录管理员
+                isReadOnly = false;
+                showMainSection();
                 fetchMaterials(); 
+            } else if (guest === 'true') {
+                // 访客模式
+                isReadOnly = true;
+                showMainSection();
+                setReadOnlyMode();
+                fetchMaterials();
             }
         };
+        
+        function showMainSection() {
+            document.getElementById('auth-section').style.display = 'none';
+            document.getElementById('main-section').style.display = 'block';
+        }
+
+        function setReadOnlyMode() {
+            isReadOnly = true;
+            // 隐藏所有修改部分
+            document.getElementById('manual-section').style.display = 'none';
+            document.getElementById('import-section').style.display = 'none';
+            document.getElementById('logout-btn').style.display = 'none';
+            
+            // 显示只读通知
+            document.getElementById('read-only-notice').style.display = 'block';
+            
+            // 隐藏操作列头
+            document.getElementById('actions-header').style.display = 'none';
+
+            // 重新渲染表格以隐藏操作按钮
+            // fetchMaterials() 会在 onload 时调用
+        }
 
         // --- 核心 CRUD & Upload 逻辑 ---
 
@@ -238,10 +287,11 @@ const FRONTEND_HTML = `
         }
 
         async function handleSave() {
+            if (isReadOnly) return alert('访客模式下禁止操作。');
             const token = localStorage.getItem('jwtToken');
             const status = document.getElementById('manual-status');
             const data = getFormData();
-
+            // ... (省略 save 逻辑，因为与之前相同)
             if (!token) { status.textContent = '请先登录。'; status.style.color = 'red'; return; }
             if (!data.UID || !data.unified_name) {
                 status.textContent = 'UID 和 统一名称 不能为空。'; status.style.color = 'red'; return;
@@ -274,38 +324,34 @@ const FRONTEND_HTML = `
             }
         }
 
-        // --- 2. 图片上传 (已修改为直接上传到 Worker) ---
+        // --- 2. 图片上传 ---
 
         async function handleImageUpload() {
+            if (isReadOnly) return alert('访客模式下禁止操作。');
             const fileInput = document.getElementById('f_image_file');
             const keyInput = document.getElementById('f_r2_image_key');
             const status = document.getElementById('manual-status');
             const token = localStorage.getItem('jwtToken');
             
+            // ... (省略 upload 逻辑，因为与之前相同)
             if (!token) { status.textContent = '请先登录。'; status.style.color = 'red'; return; }
             if (fileInput.files.length === 0) { status.textContent = '请选择图片文件。'; status.style.color = 'red'; return; }
             
             const file = fileInput.files[0];
-            // 如果 Key 为空，则生成一个默认 Key
             const r2Key = keyInput.value.trim() || \`uploads/\${Date.now()}/\${file.name}\`;
             
             status.textContent = '正在直接上传文件到 Worker...';
             status.style.color = 'blue';
 
             try {
-                // 1. 构造 FormData
                 const formData = new FormData();
                 formData.append('file', file);
                 formData.append('key', r2Key);
                 
-                // 2. 发送请求到新的直接上传 API (/api/upload)
                 const uploadResponse = await fetch(\`\${API_BASE_URL}/upload\`, {
                     method: 'POST',
-                    headers: {
-                        // 注意：使用 FormData 时，浏览器会自动设置 Content-Type 为 multipart/form-data
-                        'Authorization': 'Bearer ' + token
-                    },
-                    body: formData // 直接发送 FormData
+                    headers: { 'Authorization': 'Bearer ' + token },
+                    body: formData 
                 });
                 
                 const result = await uploadResponse.json();
@@ -314,12 +360,10 @@ const FRONTEND_HTML = `
                      throw new Error(result.message || uploadResponse.statusText);
                 }
 
-                // 3. 更新表单字段
                 keyInput.value = r2Key; 
                 status.textContent = \`图片上传成功！R2 Key: \${r2Key}\`;
                 status.style.color = 'green';
                 
-                // 提示用户保存记录
                 if (document.getElementById('f_UID').value) {
                     status.textContent += ' 请点击 "保存/更新记录" 以更新数据库记录。';
                 }
@@ -333,6 +377,7 @@ const FRONTEND_HTML = `
         // --- 3. 批量导入 ---
         
         function parseCSV(csvText) {
+            // ... (省略 parseCSV 逻辑，因为与之前相同)
             const lines = csvText.trim().split(/\\r?\\n/); 
             if (lines.length === 0) return [];
             
@@ -375,13 +420,14 @@ const FRONTEND_HTML = `
         }
 
         async function handleBulkImport() {
+            if (isReadOnly) return alert('访客模式下禁止操作。');
             const fileInput = document.getElementById('import-file');
             const status = document.getElementById('import-status');
             const token = localStorage.getItem('jwtToken');
 
             if (!token) { status.textContent = '请先登录。'; status.style.color = 'red'; return; }
             if (fileInput.files.length === 0) { status.textContent = '请选择一个 CSV 或 JSON 文件。'; status.style.color = 'red'; return; }
-
+            // ... (省略 import 逻辑，因为与之前相同)
             const file = fileInput.files[0];
             const reader = new FileReader();
 
@@ -434,8 +480,9 @@ const FRONTEND_HTML = `
         // --- 4. 删除 ---
         
         async function handleDelete(uid) {
+            if (isReadOnly) return alert('访客模式下禁止操作。');
             if (!confirm('确定要删除 UID 为 ' + uid + ' 的材料记录吗？\\n此操作不可逆！')) return;
-
+            // ... (省略 delete 逻辑，因为与之前相同)
             const token = localStorage.getItem('jwtToken');
             try {
                 const response = await fetch(\`\${API_BASE_URL}/materials/\${uid}\`, {
@@ -459,6 +506,7 @@ const FRONTEND_HTML = `
         // --- 5. 表单/UI 辅助功能 ---
         
         function resetManualForm() {
+            if (isReadOnly) return alert('访客模式下禁止操作。');
             document.getElementById('material-form').reset();
             document.getElementById('manual-status').textContent = '表单已清空。';
             document.getElementById('manual-status').style.color = 'blue';
@@ -466,6 +514,7 @@ const FRONTEND_HTML = `
         }
 
         function handleEdit(material) {
+            if (isReadOnly) return alert('访客模式下禁止操作。');
             // 清空状态
             document.getElementById('manual-status').textContent = '正在编辑记录: ' + material.UID;
             document.getElementById('manual-status').style.color = '#17a2b8';
@@ -484,7 +533,7 @@ const FRONTEND_HTML = `
         }
 
 
-        // --- 登录/退出功能 ---
+        // --- 登录/退出/访客功能 ---
         async function handleLogin() {
             const username = document.getElementById('username').value;
             const password = document.getElementById('password').value;
@@ -502,11 +551,18 @@ const FRONTEND_HTML = `
                 if (response.ok) {
                     const data = await response.json();
                     localStorage.setItem('jwtToken', data.token);
-                    status.textContent = '登录成功！';
+                    localStorage.removeItem('isGuest'); // 清除访客标记
+                    status.textContent = '登录成功！(管理员模式)';
                     status.style.color = 'green';
                     
-                    document.getElementById('auth-section').style.display = 'none';
-                    document.getElementById('main-section').style.display = 'block';
+                    isReadOnly = false;
+                    document.getElementById('read-only-notice').style.display = 'none';
+                    document.getElementById('manual-section').style.display = 'block';
+                    document.getElementById('import-section').style.display = 'block';
+                    document.getElementById('logout-btn').style.display = 'block';
+                    document.getElementById('actions-header').style.display = 'table-cell'; // 显示操作列头
+
+                    showMainSection();
                     fetchMaterials();
                 } else {
                     status.textContent = '登录失败: ' + (await response.text() || response.statusText);
@@ -518,43 +574,59 @@ const FRONTEND_HTML = `
             }
         }
         
+        function handleViewAsGuest() {
+            localStorage.removeItem('jwtToken');
+            localStorage.setItem('isGuest', 'true');
+            document.getElementById('login-status').textContent = '已进入访客模式。';
+            document.getElementById('login-status').style.color = '#007bff';
+            
+            isReadOnly = true;
+            showMainSection();
+            setReadOnlyMode();
+            fetchMaterials();
+        }
+
         function handleLogout() {
             localStorage.removeItem('jwtToken');
+            localStorage.removeItem('isGuest');
+            
             document.getElementById('main-section').style.display = 'none';
             document.getElementById('auth-section').style.display = 'block';
             document.getElementById('login-status').textContent = '已退出登录。';
             document.getElementById('login-status').style.color = 'green';
+            isReadOnly = false;
         }
 
-        // --- 查询和渲染 ---
+        // --- 查询和渲染 (更新表格结构) ---
 
         async function fetchMaterials() {
             const query = document.getElementById('search-query').value;
-            const token = localStorage.getItem('jwtToken');
+            // 访客模式下也允许查询
+            const token = localStorage.getItem('jwtToken'); 
             const body = document.getElementById('results-body');
-            body.innerHTML = '<tr><td colspan="6" style="text-align: center;">正在查询...</td></tr>';
+            body.innerHTML = '<tr><td colspan="10" style="text-align: center;">正在查询...</td></tr>';
             
-            if (!token) {
-                body.innerHTML = '<tr><td colspan="6" style="color: red; text-align: center;">请先登录。</td></tr>';
+            if (!token && !isReadOnly) { // 既没Token也不是访客模式，理论上不应该发生，但作为安全检查
+                body.innerHTML = '<tr><td colspan="10" style="color: red; text-align: center;">请先登录或以访客身份查看。</td></tr>';
                 return;
             }
 
             try {
                 const response = await fetch(\`\${API_BASE_URL}/materials?q=\${encodeURIComponent(query)}\`, {
-                    headers: { 'Authorization': 'Bearer ' + token }
+                    headers: token ? { 'Authorization': 'Bearer ' + token } : {} // 访客模式无须 Authorization
                 });
 
                 if (response.ok) {
                     const materials = await response.json();
                     renderMaterials(materials);
                 } else if (response.status === 403 || response.status === 401) {
-                    body.innerHTML = '<tr><td colspan="6" style="color: red; text-align: center;">权限过期，请重新登录。</td></tr>';
+                    body.innerHTML = '<tr><td colspan="10" style="color: red; text-align: center;">权限过期，请重新登录。</td></tr>';
                     handleLogout();
                 } else {
-                    body.innerHTML = '<tr><td colspan="6" style="color: red; text-align: center;">查询失败: ' + response.statusText + '</td></tr>';
+                    body.innerHTML = '<tr><td colspan="10" style="color: red; text-align: center;">查询失败: ' + response.statusText + '</td></tr>';
                 }
             } catch (error) {
-                body.innerHTML = '<tr><td colspan="6" style="color: red; text-align: center;">网络错误: ' + error.message + '</td></tr>';
+                body.innerHTML = '<tr><td colspan="10" style="color: red; text-align: center;">网络错误: ' + error.message + '</td></tr>';
             }
         }
 
@@ -563,7 +635,7 @@ const FRONTEND_HTML = `
             body.innerHTML = ''; 
 
             if (materials.length === 0) {
-                body.innerHTML = '<tr><td colspan="6" style="text-align: center;">未找到匹配的材料。</td></tr>';
+                body.innerHTML = '<tr><td colspan="10" style="text-align: center;">未找到匹配的材料。</td></tr>';
                 return;
             }
 
@@ -571,16 +643,18 @@ const FRONTEND_HTML = `
                 const row = body.insertRow();
                 
                 let dimensions = '';
-                if (mat.diameter_mm) {
-                    dimensions = \`Ø\${mat.diameter_mm}\`;
-                } else if (mat.length_mm && mat.width_mm) {
-                    dimensions = \`\${mat.length_mm} x \${mat.width_mm}\`;
+                if (mat.length_mm && mat.width_mm) {
+                    dimensions = \`\${mat.length_mm} x \${mat.width_mm} mm\`;
+                } else if (mat.length_mm) {
+                    dimensions = \`\${mat.length_mm} mm\`;
+                } else if (mat.width_mm) {
+                    dimensions = \`\${mat.width_mm} mm\`;
                 }
-
-                // 移除不必要的字段，只保留需要传给 handleEdit 的数据
-                const cleanMat = JSON.stringify(mat).replace(/'/g, "\\\\'"); // 确保字符串可以作为JS参数传递
                 
-                // 🚨 图片单元格更新：添加 <a> 标签以便点击查看大图
+                // 移除不必要的字段，只保留需要传给 handleEdit 的数据
+                const cleanMat = JSON.stringify(mat).replace(/'/g, "\\\\'"); 
+                
+                // 1. 图片单元格
                 const imgCell = row.insertCell();
                 if (mat.image_url) {
                     imgCell.innerHTML = \`<a href="\${mat.image_url}" target="_blank"><img src="\${mat.image_url}" class="material-img" alt="\${mat.unified_name}"></a>\`;
@@ -588,29 +662,49 @@ const FRONTEND_HTML = `
                     imgCell.textContent = '-';
                 }
                 
-                // 数据展示
+                // 2. 统一名称
+                row.insertCell().textContent = mat.unified_name || '-';
+                
+                // 3. 材质 (大类)
+                row.insertCell().textContent = mat.material_type || '-';
+                
+                // 4. 小类
+                row.insertCell().textContent = mat.sub_category || '-';
+
+                // 5. 型号
+                row.insertCell().textContent = mat.model_number || '-';
+                
+                // 6. 规格/尺寸
+                row.insertCell().textContent = dimensions || '-';
+                
+                // 7. 直径
+                row.insertCell().textContent = mat.diameter_mm ? \`Ø\${mat.diameter_mm} mm\` : '-';
+
+                // 8. 颜色
+                row.insertCell().textContent = mat.color || '-';
+                
+                // 9. 唯一识别码(UID)
                 row.insertCell().textContent = mat.UID;
-                row.insertCell().innerHTML = \`
-                    <span style="font-weight: bold;">\${mat.unified_name}</span> <br>
-                    型号: \${mat.model_number || '-'} <br> 
-                    尺寸: \${dimensions || '-'}
-                \`;
-                row.insertCell().innerHTML = \`
-                    小类: \${mat.sub_category || '-'} <br>
-                    材质: \${mat.material_type || '-'} <br>
-                    颜色: \${mat.color || '-'}
-                \`;
 
-                row.insertCell().textContent = mat.r2_image_key || '-';
-
-                // 操作按钮
-                const actionsCell = row.insertCell();
-                actionsCell.innerHTML = \`
-                    <button class="edit-btn" onclick='handleEdit(\${cleanMat})'>编辑</button>
-                    <button class="delete-btn" onclick="handleDelete('\${mat.UID}')">删除</button>
-                \`;
-                actionsCell.style.textAlign = 'center';
+                // 10. 操作 (只在管理员模式下显示)
+                if (!isReadOnly) {
+                    const actionsCell = row.insertCell();
+                    actionsCell.innerHTML = \`
+                        <button class="edit-btn" onclick='handleEdit(\${cleanMat})'>编辑</button>
+                        <button class="delete-btn" onclick="handleDelete('\${mat.UID}')">删除</button>
+                    \`;
+                    actionsCell.style.textAlign = 'center';
+                } else {
+                    // 访客模式下，操作列不插入单元格，保持列数一致
+                    row.insertCell().textContent = '禁止操作'; 
+                    row.cells[row.cells.length - 1].style.display = 'none'; // 确保单元格不显示
+                }
             });
+            
+             // 确保表格的头部和主体在访客模式下保持一致
+            if (isReadOnly) {
+                 document.getElementById('actions-header').style.display = 'none';
+            }
         }
     </script>
 </body>
@@ -638,7 +732,8 @@ function getPublicImageUrl(r2_key, env) {
 async function authenticate(request, env) {
     const authHeader = request.headers.get('Authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        return { authorized: false, status: 401 };
+        // 允许未认证的请求继续，但后面需要检查是否是只读操作
+        return { authorized: false, status: 401 }; 
     }
     const token = authHeader.split(' ')[1];
     
@@ -655,9 +750,25 @@ async function authenticate(request, env) {
 
 // --- API 路由处理函数 ---
 
+// 仅管理员可执行的操作列表
+const ADMIN_ACTIONS = ['POST', 'PUT', 'DELETE'];
+
+// 检查是否为只读操作（GET是只读，其他是管理员操作）
+function isReadOnlyRequest(method, path) {
+    if (method === 'GET') {
+        return true; // GET 请求全部视为只读
+    }
+    // 所有涉及修改数据的 API 路径都必须由管理员执行
+    if (ADMIN_ACTIONS.includes(method)) {
+        return false;
+    }
+    return true; // 其他非修改方法（如OPTIONS）也视为安全
+}
+
+
 async function handleLogin(request, env) {
+    // ... (登录逻辑保持不变)
     if (!env.DB) {
-        // 如果 DB 绑定丢失，使用硬编码测试逻辑（与前端'test'/'testpass'匹配）
         const { username, password } = await request.json();
         if (username === 'test' && password === 'testpass') {
              const token = await jwt.sign({ user: 'admin', exp: Math.floor(Date.now() / 1000) + (60 * 60 * 24) }, env.JWT_SECRET);
@@ -681,7 +792,6 @@ async function handleLogin(request, env) {
         
         const user = users[0];
         
-        // 假设您的 D1 users 表中 'test' 用户的 password_hash 字段是 'testpass'
         if (!await comparePassword(password, user.password_hash || 'testpass', env)) { 
              return new Response('Invalid credentials (Password mismatch)', { status: 401 });
         }
@@ -707,8 +817,9 @@ async function handleLogin(request, env) {
     }
 }
 
-// 🚨 新增：直接上传处理函数 (Direct Upload) - 替换了 presigned-url 逻辑
+
 async function handleDirectUpload(request, env) {
+    // ... (上传逻辑保持不变)
     const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
 
     if (!env.R2_MEDIA) {
@@ -730,9 +841,7 @@ async function handleDirectUpload(request, env) {
             return new Response(JSON.stringify({ message: 'Missing file or R2 key in form data or file is empty.' }), { status: 400, headers });
         }
         
-        // 核心变化：直接使用 put() 方法上传文件
         await env.R2_MEDIA.put(r2Key, file.stream(), {
-            // 可选：设置 Content-Type 以确保浏览器正确显示
             httpMetadata: { contentType: file.type || 'application/octet-stream' }
         }); 
 
@@ -754,8 +863,8 @@ async function handleDirectUpload(request, env) {
     }
 }
 
-// 新增 API：处理单条记录创建/更新 (Manual Save)
 async function handleCreateUpdateMaterial(request, env) {
+    // ... (新增/编辑逻辑保持不变)
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
@@ -792,6 +901,7 @@ async function handleCreateUpdateMaterial(request, env) {
 
 
 async function handleQueryMaterials(request, env) {
+    // ... (查询逻辑保持不变)
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
@@ -806,9 +916,9 @@ async function handleQueryMaterials(request, env) {
             stmt = env.DB.prepare(`
                 SELECT * FROM materials 
                 WHERE UID LIKE ? OR unified_name LIKE ? 
-                   OR alias LIKE ? OR sub_category LIKE ?
+                   OR alias LIKE ? OR sub_category LIKE ? OR model_number LIKE ?
                 LIMIT 100
-            `).bind(searchPattern, searchPattern, searchPattern, searchPattern);
+            `).bind(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern);
         } else {
             stmt = env.DB.prepare("SELECT * FROM materials LIMIT 100");
         }
@@ -832,6 +942,7 @@ async function handleQueryMaterials(request, env) {
 
 
 async function handleImportMaterials(request, env) {
+    // ... (导入逻辑保持不变)
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
@@ -893,6 +1004,7 @@ async function handleImportMaterials(request, env) {
 }
 
 async function handleDeleteMaterial(request, env) {
+    // ... (删除逻辑保持不变)
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
@@ -940,7 +1052,7 @@ export default {
         };
 
         if (method === 'OPTIONS') {
-            return new Response(null, { headers: { ...headers, 'Content-Type': undefined } });
+            return new Response(null, { headers: { ...headers, 'Content-Type': undefined } } );
         }
 
         if (path === '/' && method === 'GET') {
@@ -952,10 +1064,28 @@ export default {
         }
         
         if (path.startsWith('/api/')) {
+            
+            // 1. 检查是否为只读操作 (GET请求一律放行，不需认证)
+            if (isReadOnlyRequest(method, path)) {
+                // GET /api/materials (Query) - 允许访客查看
+                if (path === '/api/materials' && method === 'GET') {
+                    return handleQueryMaterials(request, env);
+                }
+                // 如果是其他不涉及修改的 GET 请求，也可以放在这里
+            }
+
+            // 2. 检查管理员权限 (非 GET/OPTIONS 请求必须认证)
             const authResult = await authenticate(request, env);
             if (!authResult.authorized) {
-                return new Response('Authentication Required or Forbidden', { status: authResult.status, headers });
+                // 如果是 GET 请求，但前面没处理 (即不是 /api/materials)，则返回 404/401
+                if (method === 'GET') {
+                    return new Response('Not Found or Unauthorized', { status: 404, headers });
+                }
+                // 否则是修改类请求，直接返回未认证
+                return new Response('Authentication Required for this action', { status: 401, headers });
             }
+            
+            // 3. 管理员操作路由
             
             // DELETE /api/materials/:uid
             if (path.startsWith('/api/materials/') && method === 'DELETE') {
@@ -967,12 +1097,7 @@ export default {
                  return handleCreateUpdateMaterial(request, env);
             }
             
-            // GET /api/materials (Query)
-            if (path === '/api/materials' && method === 'GET') {
-                return handleQueryMaterials(request, env);
-            }
-            
-            // POST /api/upload (R2 Direct Upload) - 替换了 presign-url 路由
+            // POST /api/upload (R2 Direct Upload)
             if (path === '/api/upload' && method === 'POST') {
                 return handleDirectUpload(request, env); 
             }
