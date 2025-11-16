@@ -8,7 +8,7 @@ compatibility_date = "2025-11-15"
 # ⚠️ 替换为您的强密钥
 JWT_SECRET = "52K4XBLMH!sf4@nGdM=1L#{e-A-.tjxY123123szxczczxcasdad" 
 # ⚠️ 替换为您的 R2 公共访问域名 (例如: https://pic.rvtbyhwdwd.icu/)
-R2_PUBLIC_DOMAIN = "https://pic.rvtbyhwdwd.icu/" 
+R2_PUBLIC_DOMAIN = "https://pic.rvtbyhwdwd.icu" 
 
 # 2. D1 数据库绑定
 [[d1_databases]]
