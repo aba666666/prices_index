@@ -253,11 +253,14 @@ const FRONTEND_HTML = `
 
         // --- 核心 CRUD & Upload 逻辑 ---
 
-        function getAuthHeaders() {
-            return {
-                'Content-Type': 'application/json',
+        function getAuthHeaders(contentType = 'application/json') {
+            const headers = {
                 'Authorization': 'Bearer ' + localStorage.getItem('jwtToken')
             };
+            if (contentType) {
+                 headers['Content-Type'] = contentType;
+            }
+            return headers;
         }
         
         // --- 1. 手动编辑/新增 (Save) ---
@@ -315,7 +318,7 @@ const FRONTEND_HTML = `
             }
         }
 
-        // --- 2. 图片上传 (使用 presign-url 逻辑) ---
+        // --- 2. 图片上传 (改为 Worker 代理上传逻辑) ---
 
         async function handleImageUpload() {
             if (isReadOnly) return alert('访客模式下禁止操作。');
@@ -327,39 +330,37 @@ const FRONTEND_HTML = `
             if (!token) { status.textContent = '请先登录。'; status.style.color = 'red'; return; }
             if (fileInput.files.length === 0) { status.textContent = '请选择图片文件。'; status.style.color = 'red'; return; }
             const file = fileInput.files[0];
-            const r2Key = keyInput.value.trim() || \`uploads/\${Date.now()}/\${file.name}\`;
             
-            status.textContent = '正在请求 R2 签名链接...';
+            // 默认 R2 Key 或使用用户输入的 Key
+            const r2Key = keyInput.value.trim() || \`uploads/\${Date.now()}-\${file.name}\`;
+            
+            status.textContent = '正在上传文件到 R2 (通过 Worker 代理)...';
             status.style.color = 'blue';
 
             try {
-                // 1. 获取预签名 URL
-                const signResponse = await fetch(\`\${API_BASE_URL}/presign-url\`, {
+                // 使用 FormData 构造请求体，以便 Worker 能够解析文件
+                const formData = new FormData();
+                formData.append('file', file);
+                formData.append('key', r2Key);
+                
+                // 1. 直接上传到 Worker API
+                const uploadResponse = await fetch(\`\${API_BASE_URL}/upload-file\`, {
                     method: 'POST',
-                    headers: getAuthHeaders(),
-                    body: JSON.stringify({ key: r2Key })
+                    // 注意：当使用 FormData 时，浏览器会自动设置 Content-Type: multipart/form-data; boundary=...
+                    // 必须将 getAuthHeaders 的 contentType 设置为 null 或不传递 Content-Type
+                    headers: getAuthHeaders(null), 
+                    body: formData 
                 });
                 
-                if (!signResponse.ok) throw new Error(\`签名失败: \${signResponse.statusText}\`);
+                const result = await uploadResponse.json();
 
-                const { uploadUrl } = await signResponse.json();
-                
-                // 2. 直接上传到 R2
-                status.textContent = '正在上传文件到 R2...';
-                const uploadResponse = await fetch(uploadUrl, {
-                    method: 'PUT',
-                    headers: {
-                        'Content-Type': file.type || 'application/octet-stream',
-                        'Content-Length': file.size
-                    },
-                    body: file
-                });
-                
-                if (!uploadResponse.ok) throw new Error(\`上传失败: \${uploadResponse.statusText}\`);
+                if (!uploadResponse.ok) {
+                    throw new Error(result.message || uploadResponse.statusText);
+                }
 
-                // 3. 更新表单字段
-                keyInput.value = r2Key; 
-                status.textContent = \`图片上传成功！R2 Key: \${r2Key}\`;
+                // 2. 更新表单字段
+                keyInput.value = result.r2Key; 
+                status.textContent = \`图片上传成功！R2 Key: \${result.r2Key}\`;
                 status.style.color = 'green';
                 
                 if (document.getElementById('f_UID').value) {
@@ -833,33 +834,44 @@ async function handleLogin(request, env) {
 }
 
 
-async function handleGeneratePresignedUrl(request, env) {
+/**
+ * @description: Worker 代理图片上传到 R2 的新函数，替换了预签名 URL 逻辑。
+ */
+async function handleUploadFile(request, env) {
     if (!env.R2_BUCKET) {
         return new Response(JSON.stringify({ 
             message: 'R2_BUCKET binding is missing.'
-        }), { status: 500 });
-    }
-    
-    const { key } = await request.json();
-    if (!key) {
-        return new Response(JSON.stringify({ message: 'Missing R2 key.' }), { status: 400 });
+        }), { status: 500, headers: { 'Content-Type': 'application/json' } });
     }
     
     try {
-        // 创建一个用于 PUT 操作的预签名 URL，有效期 5 分钟
-        const signedUrl = await env.R2_BUCKET.createPresignedUrl({
-            key: key,
-            method: 'PUT',
-            expiration: 60 * 5 
+        // 解析 multipart/form-data
+        const formData = await request.formData();
+        const file = formData.get('file');
+        const r2Key = formData.get('key');
+        
+        if (!file || !r2Key) {
+             return new Response(JSON.stringify({ message: 'Missing file or R2 key in form data.' }), { status: 400 });
+        }
+        
+        // 文件上传到 R2。注意：这里假设 'file' 是一个 File 对象，其 body 是可读流。
+        // Worker 将文件体（stream）传递给 R2.put()
+        await env.R2_BUCKET.put(r2Key, file.stream(), {
+            httpMetadata: { contentType: file.type }
         });
 
-        return new Response(JSON.stringify({ uploadUrl: signedUrl.url, r2Key: key }), {
+        return new Response(JSON.stringify({ 
+            status: 'success', 
+            message: `File uploaded to R2 Key: ${r2Key}`,
+            r2Key: r2Key
+        }), {
             headers: { 'Content-Type': 'application/json' }
         });
         
     } catch (e) {
+        console.error("Upload error:", e);
         return new Response(JSON.stringify({ 
-            message: `Failed to generate presigned URL: ${e.message}`,
+            message: `Failed to upload file to R2: ${e.message}`,
         }), { 
             status: 500,
             headers: { 'Content-Type': 'application/json' }
@@ -1100,9 +1112,9 @@ export default {
                  return handleCreateUpdateMaterial(request, env);
             }
             
-            // POST /api/presign-url (R2 Upload)
-            if (path === '/api/presign-url' && method === 'POST') {
-                return handleGeneratePresignedUrl(request, env);
+            // POST /api/upload-file (新的 R2 代理上传路由)
+            if (path === '/api/upload-file' && method === 'POST') {
+                return handleUploadFile(request, env);
             }
 
             // POST /api/import (Bulk Import)
