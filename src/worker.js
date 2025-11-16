@@ -693,18 +693,24 @@ async function handleLogin(request, env) {
     }
 }
 
-// 新增 API：生成 R2 预签名 URL
+// src/worker.js - 临时调试版本
+
 async function handleGeneratePresignedUrl(request, env) {
     if (!env.R2_BUCKET) {
-        return new Response(JSON.stringify({ message: 'R2_BUCKET binding is missing.' }), { status: 500 });
+        // 如果绑定完全丢失，则返回此信息
+        return new Response(JSON.stringify({ 
+            message: 'R2_BUCKET binding is missing.',
+            debug: 'R2_BUCKET is null or undefined.'
+        }), { status: 500 });
     }
+    
     const { key } = await request.json();
     if (!key) {
         return new Response(JSON.stringify({ message: 'Missing R2 key.' }), { status: 400 });
     }
     
     try {
-        // 生成一个用于 PUT 操作的预签名 URL，有效期 5 分钟
+        // 尝试调用 createPresignedUrl
         const signedUrl = await env.R2_BUCKET.createPresignedUrl({
             key: key,
             method: 'PUT',
@@ -714,10 +720,20 @@ async function handleGeneratePresignedUrl(request, env) {
         return new Response(JSON.stringify({ uploadUrl: signedUrl.url, r2Key: key }), {
             headers: { 'Content-Type': 'application/json' }
         });
+        
     } catch (e) {
-        console.error("Presign error:", e);
-        // 为了排查问题，可以在这里打印 env.R2_BUCKET 的结构（但通常会被 Worker 环境安全策略禁止）
-        return new Response(JSON.stringify({ message: `Failed to generate presigned URL: ${e.message}` }), { status: 500 });
+        // --- 捕获错误并返回关键调试信息 ---
+        let debugInfo = `R2_BUCKET object type: ${typeof env.R2_BUCKET}. `;
+        debugInfo += `Does it have createPresignedUrl? ${typeof env.R2_BUCKET.createPresignedUrl}`;
+        // ---------------------------------
+        
+        return new Response(JSON.stringify({ 
+            message: `Failed to generate presigned URL: ${e.message}`,
+            debug: debugInfo // 返回调试信息
+        }), { 
+            status: 500,
+            headers: { 'Content-Type': 'application/json' }
+        });
     }
 }
 
