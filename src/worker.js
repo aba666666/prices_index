@@ -1,7 +1,7 @@
 // src/worker.js
 import * as jwt from '@tsndr/cloudflare-worker-jwt';
 
-// --- 完整的内嵌前端 HTML/JS (已更新布局、访客逻辑和 CSV 解析) ---
+// --- 完整的内嵌前端 HTML/JS (已更新布局、访客逻辑和 CSV 解析/编码修复) ---
 const FRONTEND_HTML = `
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -292,7 +292,7 @@ const FRONTEND_HTML = `
             status.style.color = 'blue';
 
             try {
-                const response = await fetch(\`\${API_BASE_URL}/materials\`, {
+                const response = await fetch(`${API_BASE_URL}/materials`, {
                     method: 'POST',
                     headers: getAuthHeaders(),
                     body: JSON.stringify(data)
@@ -301,11 +301,11 @@ const FRONTEND_HTML = `
                 const result = await response.json();
 
                 if (response.ok && result.status === 'success') {
-                    status.textContent = \`记录 \${result.uid} 保存成功！\`;
+                    status.textContent = `记录 ${result.uid} 保存成功！`;
                     status.style.color = 'green';
                     fetchMaterials(); 
                 } else {
-                    status.textContent = \`保存失败: \${result.message || response.statusText}\`;
+                    status.textContent = `保存失败: ${result.message || response.statusText}`;
                     status.style.color = 'red';
                 }
 
@@ -327,20 +327,20 @@ const FRONTEND_HTML = `
             if (!token) { status.textContent = '请先登录。'; status.style.color = 'red'; return; }
             if (fileInput.files.length === 0) { status.textContent = '请选择图片文件。'; status.style.color = 'red'; return; }
             const file = fileInput.files[0];
-            const r2Key = keyInput.value.trim() || \`uploads/\${Date.now()}/\${file.name}\`;
+            const r2Key = keyInput.value.trim() || `uploads/${Date.now()}/${file.name}`;
             
             status.textContent = '正在请求 R2 签名链接...';
             status.style.color = 'blue';
 
             try {
                 // 1. 获取预签名 URL
-                const signResponse = await fetch(\`\${API_BASE_URL}/presign-url\`, {
+                const signResponse = await fetch(`${API_BASE_URL}/presign-url`, {
                     method: 'POST',
                     headers: getAuthHeaders(),
                     body: JSON.stringify({ key: r2Key })
                 });
                 
-                if (!signResponse.ok) throw new Error(\`签名失败: \${signResponse.statusText}\`);
+                if (!signResponse.ok) throw new Error(`签名失败: ${signResponse.statusText}`);
 
                 const { uploadUrl } = await signResponse.json();
                 
@@ -355,11 +355,11 @@ const FRONTEND_HTML = `
                     body: file
                 });
                 
-                if (!uploadResponse.ok) throw new Error(\`上传失败: \${uploadResponse.statusText}\`);
+                if (!uploadResponse.ok) throw new Error(`上传失败: ${uploadResponse.statusText}`);
 
                 // 3. 更新表单字段
                 keyInput.value = r2Key; 
-                status.textContent = \`图片上传成功！R2 Key: \${r2Key}\`;
+                status.textContent = `图片上传成功！R2 Key: ${r2Key}`;
                 status.style.color = 'green';
                 
                 if (document.getElementById('f_UID').value) {
@@ -372,10 +372,10 @@ const FRONTEND_HTML = `
             }
         }
 
-        // --- 3. 批量导入 (已优化 CSV 解析逻辑) ---
+        // --- 3. 批量导入 - CSV 解析 (已优化按列名映射) ---
         
         function parseCSV(csvText) {
-            const lines = csvText.trim().split(/\\r?\\n/); 
+            const lines = csvText.trim().split(/\r?\n/); 
             if (lines.length === 0) return [];
             
             const TARGET_FIELDS = ["UID", "unified_name", "material_type", "sub_category", "alias", "color", "model_number", "length_mm", "width_mm", "diameter_mm", "r2_image_key"];
@@ -432,12 +432,14 @@ const FRONTEND_HTML = `
                 if (item.UID && item.unified_name) {
                     data.push(item);
                 } else {
-                    console.warn(\`跳过无效行 (缺少UID或统一名称): \${lines[i]}\`);
+                    console.warn(`跳过无效行 (缺少UID或统一名称): ${lines[i]}`);
                 }
             }
             return data;
         }
 
+
+        // --- 3. 批量导入处理 (已修复中文 CSV 乱码) ---
 
         async function handleBulkImport() {
             if (isReadOnly) return alert('访客模式下禁止操作。');
@@ -459,24 +461,20 @@ const FRONTEND_HTML = `
                     if (file.name.toLowerCase().endsWith('.json')) {
                         materialsArray = JSON.parse(content);
                     } else if (file.name.toLowerCase().endsWith('.csv')) {
-                        materialsArray = parseCSV(content); // 使用新的解析函数
+                        // 使用已读取的内容进行 CSV 解析
+                        materialsArray = parseCSV(content); 
                     } else {
                         status.textContent = '不支持的文件类型。'; status.style.color = 'red'; return;
                     }
 
-                    if (!Array.isArray(materialsArray)) {
-                        status.textContent = '文件内容错误：请确保是 JSON 数组或格式正确的 CSV。'; status.style.color = 'red'; return;
+                    if (!Array.isArray(materialsArray) || materialsArray.length === 0) {
+                        status.textContent = '文件内容错误或未解析到有效数据。'; status.style.color = 'red'; return;
                     }
                     
-                    if (materialsArray.length === 0) {
-                        status.textContent = '未解析到有效数据，请检查文件内容和格式。'; status.style.color = 'red'; return;
-                    }
-
-
-                    status.textContent = \`正在导入 \${materialsArray.length} 条有效数据...\`;
+                    status.textContent = `正在导入 ${materialsArray.length} 条有效数据...`;
                     status.style.color = 'blue';
 
-                    const response = await fetch(\`\${API_BASE_URL}/import\`, {
+                    const response = await fetch(`${API_BASE_URL}/import`, {
                         method: 'POST',
                         headers: getAuthHeaders(),
                         body: JSON.stringify(materialsArray)
@@ -485,11 +483,11 @@ const FRONTEND_HTML = `
                     const result = await response.json();
 
                     if (response.ok && result.status === 'success') {
-                        status.textContent = \`导入成功！总计处理 \${result.total_processed} 条，导入/更新 \${result.imported_count} 条。\`;
+                        status.textContent = `导入成功！总计处理 ${result.total_processed} 条，导入/更新 ${result.imported_count} 条。`;
                         status.style.color = 'green';
                         fetchMaterials();
                     } else {
-                        status.textContent = \`导入失败: \${result.message || response.statusText}\`;
+                        status.textContent = `导入失败: ${result.message || response.statusText}`;
                         status.style.color = 'red';
                     }
 
@@ -498,8 +496,22 @@ const FRONTEND_HTML = `
                     status.style.color = 'red';
                 }
             };
-
-            reader.readAsText(file);
+            
+            // 解决中文乱码问题：尝试使用 GBK 编码读取 CSV 文件
+            if (file.name.toLowerCase().endsWith('.csv')) {
+                 try {
+                     // 尝试使用 GBK 编码，兼容 Windows/Excel 导出的中文 CSV
+                     reader.readAsText(file, 'GBK'); 
+                 } catch (e) {
+                     // 如果浏览器不支持 GBK，则退回 UTF-8 并给出提示
+                     reader.readAsText(file); 
+                     status.textContent = '警告：浏览器不支持 GBK 编码，已使用 UTF-8。若乱码，请将 CSV 文件另存为 UTF-8 编码！';
+                     status.style.color = 'orange';
+                 }
+            } else {
+                 // JSON 或其他文件保持默认 UTF-8
+                 reader.readAsText(file); 
+            }
         }
 
         // --- 4. 删除 ---
@@ -510,18 +522,18 @@ const FRONTEND_HTML = `
 
             const token = localStorage.getItem('jwtToken');
             try {
-                const response = await fetch(\`\${API_BASE_URL}/materials/\${uid}\`, {
+                const response = await fetch(`${API_BASE_URL}/materials/${uid}`, {
                     method: 'DELETE',
                     headers: { 'Authorization': 'Bearer ' + token }
                 });
 
                 if (response.ok) {
-                    alert(\`记录 \${uid} 删除成功！\`);
+                    alert(`记录 ${uid} 删除成功！`);
                     fetchMaterials(); 
                 } else if (response.status === 404) {
-                    alert(\`删除失败：记录 \${uid} 未找到。\`);
+                    alert(`删除失败：记录 ${uid} 未找到。`);
                 } else {
-                    alert(\`删除失败: \${response.statusText}\`);
+                    alert(`删除失败: ${response.statusText}`);
                 }
             } catch (error) {
                 alert('网络错误，删除失败。');
@@ -567,7 +579,7 @@ const FRONTEND_HTML = `
             status.style.color = 'blue';
 
             try {
-                const response = await fetch(\`\${API_BASE_URL}/login\`, {
+                const response = await fetch(`${API_BASE_URL}/login`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ username, password })
@@ -585,7 +597,8 @@ const FRONTEND_HTML = `
                     document.getElementById('manual-section').style.display = 'block';
                     document.getElementById('import-section').style.display = 'block';
                     document.getElementById('logout-btn').style.display = 'block';
-                    document.getElementById('actions-header').style.display = 'table-cell'; 
+                    // 强制显示操作列 (编辑/删除)
+                    if (document.getElementById('actions-header')) document.getElementById('actions-header').style.display = 'table-cell'; 
 
                     showMainSection();
                     fetchMaterials();
@@ -636,7 +649,7 @@ const FRONTEND_HTML = `
             }
 
             try {
-                const response = await fetch(\`\${API_BASE_URL}/materials?q=\${encodeURIComponent(query)}\`, {
+                const response = await fetch(`${API_BASE_URL}/materials?q=${encodeURIComponent(query)}`, {
                     headers: token ? { 'Authorization': 'Bearer ' + token } : {} 
                 });
 
@@ -669,19 +682,19 @@ const FRONTEND_HTML = `
                 // 规格/尺寸 字段合并：长度 x 宽度
                 let dimensions = '';
                 if (mat.length_mm && mat.width_mm) {
-                    dimensions = \`\${mat.length_mm} x \${mat.width_mm} mm\`;
+                    dimensions = `${mat.length_mm} x ${mat.width_mm} mm`;
                 } else if (mat.length_mm) {
-                    dimensions = \`\${mat.length_mm} mm\`;
+                    dimensions = `${mat.length_mm} mm`;
                 } else if (mat.width_mm) {
-                    dimensions = \`\${mat.width_mm} mm\`;
+                    dimensions = `${mat.width_mm} mm`;
                 }
                 
-                const cleanMat = JSON.stringify(mat).replace(/'/g, "\\\\'"); 
+                const cleanMat = JSON.stringify(mat).replace(/'/g, "\\'"); 
                 
                 // 1. 图片单元格
                 const imgCell = row.insertCell();
                 if (mat.image_url) {
-                    imgCell.innerHTML = \`<a href="\${mat.image_url}" target="_blank"><img src="\${mat.image_url}" class="material-img" alt="\${mat.unified_name}"></a>\`;
+                    imgCell.innerHTML = `<a href="${mat.image_url}" target="_blank"><img src="${mat.image_url}" class="material-img" alt="${mat.unified_name}"></a>`;
                 } else {
                     imgCell.textContent = '-';
                 }
@@ -702,7 +715,7 @@ const FRONTEND_HTML = `
                 row.insertCell().textContent = dimensions || '-';
                 
                 // 7. 直径
-                row.insertCell().textContent = mat.diameter_mm ? \`Ø\${mat.diameter_mm} mm\` : '-';
+                row.insertCell().textContent = mat.diameter_mm ? `Ø${mat.diameter_mm} mm` : '-';
 
                 // 8. 颜色
                 row.insertCell().textContent = mat.color || '-';
@@ -713,10 +726,10 @@ const FRONTEND_HTML = `
                 // 10. 操作 (只在管理员模式下显示)
                 const actionsCell = row.insertCell();
                 if (!isReadOnly) {
-                    actionsCell.innerHTML = \`
-                        <button class="edit-btn" onclick='handleEdit(\${cleanMat})'>编辑</button>
-                        <button class="delete-btn" onclick="handleDelete('\${mat.UID}')">删除</button>
-                    \`;
+                    actionsCell.innerHTML = `
+                        <button class="edit-btn" onclick='handleEdit(${cleanMat})'>编辑</button>
+                        <button class="delete-btn" onclick="handleDelete('${mat.UID}')">删除</button>
+                    `;
                     actionsCell.style.textAlign = 'center';
                 } else {
                     actionsCell.textContent = '只读'; 
@@ -783,6 +796,7 @@ async function authenticate(request, env) {
 
 async function handleLogin(request, env) {
     if (!env.DB) {
+        // 使用硬编码的登录凭证进行调试（如果 DB 绑定丢失）
         const { username, password } = await request.json();
         if (username === 'test' && password === 'testpass') {
              const token = await jwt.sign({ user: 'admin', exp: Math.floor(Date.now() / 1000) + (60 * 60 * 24) }, env.JWT_SECRET);
@@ -793,7 +807,6 @@ async function handleLogin(request, env) {
         return new Response('Configuration Error: DB binding is missing. Using fallback logic, but login failed.', { status: 401 });
     }
     
-    // ... (保持从 D1 查询用户的逻辑)
     try {
         const { username, password } = await request.json();
         
@@ -807,6 +820,7 @@ async function handleLogin(request, env) {
         
         const user = users[0];
         
+        // 注意：这里需要替换为真实的密码哈希比较逻辑
         if (!await comparePassword(password, user.password_hash || 'testpass', env)) { 
              return new Response('Invalid credentials (Password mismatch)', { status: 401 });
         }
@@ -977,8 +991,8 @@ async function handleImportMaterials(request, env) {
         let errorMessages = [];
         
         const statements = materials.map(mat => {
-            if (!mat.UID) {
-                errorMessages.push(`Missing UID for material: ${mat.unified_name || 'unknown'}`);
+            if (!mat.UID || !mat.unified_name) {
+                errorMessages.push(`Missing UID or unified_name for material: ${mat.unified_name || mat.UID || 'unknown'}`);
                 return null;
             }
             return env.DB.prepare(`
