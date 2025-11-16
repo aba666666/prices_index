@@ -18,5 +18,5 @@ database_id = "93c3be38-723f-4ab7-a735-684eed79ff21"
 
 # 3. R2 存储桶绑定
 [[r2_buckets]]
-binding = "R2_STORAGE"  # 🚨 关键修改：新的 R2 绑定名称
+binding = "R2_MEDIA"  # 🚨 关键修改：R2 绑定名称
 bucket_name = "zzzqq"
