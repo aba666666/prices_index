@@ -6,17 +6,17 @@ compatibility_date = "2025-11-15"
 # 1. 密钥配置 (JWT Secret)
 [vars]
 # ⚠️ 替换为您的强密钥，用于签名和验证JWT Token
-JWT_SECRET = "[YOUR_PRODUCTION_JWT_SECRET_KEY]" 
+JWT_SECRET = "52K4XBLMH!sf4@nGdM=1L#{e-A-.tjxY123123szxczczxcasdad" 
 # ⚠️ 替换为您的 R2 公共访问域名 (例如: https://your-bucket-name.account-id.r2.dev)
-R2_PUBLIC_DOMAIN = "[YOUR_R2_PUBLIC_DOMAIN]" 
+R2_PUBLIC_DOMAIN = "http://pic.rvtbyhwdwd.icu/" 
 
 # 2. D1 数据库绑定
 [[d1_databases]]
 binding = "DB"
 database_name = "edu_materials_db"
-database_id = "[YOUR_D1_DATABASE_ID]" 
+database_id = "93c3be38-723f-4ab7-a735-684eed79ff21" 
 
 # 3. R2 存储桶绑定
 [[r2_buckets]]
 binding = "R2_BUCKET"
-bucket_name = "[YOUR_R2_BUCKET_NAME]"
+bucket_name = "zzzqq"
