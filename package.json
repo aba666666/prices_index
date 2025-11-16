@@ -1,0 +1,18 @@
+// package.json
+{
+  "name": "edu-material-db-prod",
+  "version": "1.0.0",
+  "description": "Educational Material Database using Cloudflare D1/R2/Workers",
+  "main": "src/worker.js",
+  "scripts": {
+    "start": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "setup:db": "wrangler d1 execute edu_materials_db --file=schema.sql"
+  },
+  "dependencies": {
+    "@tsndr/cloudflare-worker-jwt": "^2.3.0"
+  },
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  }
+}
