@@ -1,14 +1,14 @@
 // src/worker.js
 import * as jwt from '@tsndr/cloudflare-worker-jwt';
 
-// --- 完整的内嵌前端 HTML/JS (已添加导入功能) ---
+// --- 完整的内嵌前端 HTML/JS (已添加 CSV 导入和删除功能) ---
 const FRONTEND_HTML = `
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>小学教育材料统一数据库 - 在线查询</title>
+    <title>小学教育材料统一数据库 - 管理端</title>
     <style>
         body { 
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
@@ -41,6 +41,12 @@ const FRONTEND_HTML = `
             cursor: pointer;
             transition: background-color 0.3s ease;
         }
+        button.delete-btn {
+            background-color: #dc3545;
+        }
+        button.delete-btn:hover {
+            background-color: #c82333;
+        }
         button:hover {
             background-color: #218838;
         }
@@ -48,11 +54,13 @@ const FRONTEND_HTML = `
             width: 100%; 
             border-collapse: collapse; 
             margin-top: 20px; 
+            table-layout: fixed;
         }
         th, td { 
             border: 1px solid #e0e0e0; 
-            padding: 12px; 
+            padding: 10px; 
             text-align: left; 
+            word-wrap: break-word;
         }
         th { 
             background-color: #e9ecef; 
@@ -84,35 +92,34 @@ const FRONTEND_HTML = `
     <hr>
     
     <div id="main-section" style="display:none;">
+        <button onclick="handleLogout()" style="float: right; background-color: #dc3545;">退出登录</button>
         
         <div id="import-section">
-            <h2>📤 批量导入 (JSON 格式)</h2>
-            <input type="file" id="import-file" accept=".json">
-            <button onclick="handleImport()">导入数据</button>
+            <h2>📤 批量导入 (支持 CSV / JSON)</h2>
+            <input type="file" id="import-file" accept=".json, .csv">
+            <button onclick="handleImport()">解析并导入数据</button>
             <p id="import-status" style="color: blue;"></p>
             <p style="font-size: 0.9em; color: #666;">
-                请上传包含材料 JSON 数组的文件。
-                <br>
-                **注意：** 导入后请重新查询以查看最新数据。
+                **CSV/JSON 字段要求：** 必须包含以下 11 个字段 (顺序不限，但推荐包含 UID 和 r2_image_key) <br>
+                <code>UID</code>, <code>unified_name</code>, <code>material_type</code>, <code>sub_category</code>, <code>alias</code>, <code>color</code>, <code>model_number</code>, <code>length_mm</code>, <code>width_mm</code>, <code>diameter_mm</code>, <code>r2_image_key</code>
             </p>
         </div>
 
         <div id="query-section">
-            <h2>🔍 材料查询</h2>
+            <h2>🔍 材料查询与管理</h2>
             <input type="text" id="search-query" placeholder="输入名称、别名或小类进行查询" style="width: 400px;">
             <button onclick="fetchMaterials()">查询</button>
-            <button onclick="handleLogout()" style="float: right; background-color: #dc3545;">退出登录</button>
             
             <table id="results-table">
                 <thead>
                     <tr>
-                        <th>图片</th>
-                        <th>唯一识别码 (UID)</th>
-                        <th>统一名称</th>
-                        <th>小类</th>
-                        <th>材质</th>
-                        <th>型号</th>
-                        <th>尺寸 (mm)</th>
+                        <th style="width: 5%;">图片</th>
+                        <th style="width: 15%;">唯一识别码 (UID)</th>
+                        <th style="width: 15%;">统一名称</th>
+                        <th style="width: 15%;">小类/材质</th>
+                        <th style="width: 15%;">型号/尺寸 (mm)</th>
+                        <th style="width: 25%;">R2 Key (图片路径)</th>
+                        <th style="width: 10%;">操作</th>
                     </tr>
                 </thead>
                 <tbody id="results-body">
@@ -123,6 +130,7 @@ const FRONTEND_HTML = `
 
     <script>
         const API_BASE_URL = '/api'; 
+        const FIELD_NAMES = ["UID", "unified_name", "material_type", "sub_category", "alias", "color", "model_number", "length_mm", "width_mm", "diameter_mm", "r2_image_key"];
 
         window.onload = function() {
             if (localStorage.getItem('jwtToken')) {
@@ -132,21 +140,70 @@ const FRONTEND_HTML = `
             }
         };
 
-        // --- 导入功能 ---
+        // --- CSV/JSON 文件解析和导入功能 ---
+
+        /** 简单的 CSV 解析函数 */
+        function parseCSV(csvText) {
+            const lines = csvText.trim().split('\\n');
+            if (lines.length === 0) return [];
+            
+            // 使用第一个非空行作为 Headers
+            const headerLine = lines[0].split(',');
+            const headers = headerLine.map(h => h.trim().replace(/['"]+/g, ''));
+            const data = [];
+
+            // 从第二行开始遍历数据
+            for (let i = 1; i < lines.length; i++) {
+                if (!lines[i].trim()) continue;
+
+                // 简单的逗号分割，可能不适用于带逗号的字段
+                const values = lines[i].split(','); 
+                let item = {};
+
+                // 尝试按头部名称匹配
+                headers.forEach((header, index) => {
+                    if (index < values.length) {
+                        const key = header.toLowerCase().replace(/[^a-z0-9_]/g, ''); // 简化键名
+                        
+                        // 尝试将 CSV 头部与预定义字段匹配
+                        const matchedField = FIELD_NAMES.find(f => f.toLowerCase() === key || f.toLowerCase().includes(key));
+                        
+                        if (matchedField) {
+                             item[matchedField] = values[index].trim().replace(/['"]+/g, '');
+                        }
+                    }
+                });
+
+                // 如果按名称匹配失败或字段不全，则按顺序填充 (简化逻辑)
+                if (Object.keys(item).length < 3) {
+                    item = {};
+                    FIELD_NAMES.forEach((field, index) => {
+                        if (index < values.length) {
+                             item[field] = values[index].trim().replace(/['"]+/g, '');
+                        }
+                    });
+                }
+                
+                // 确保数字字段是数字
+                ['length_mm', 'width_mm', 'diameter_mm'].forEach(key => {
+                    if (item[key]) item[key] = parseFloat(item[key]);
+                });
+                
+                data.push(item);
+            }
+            return data;
+        }
+
         async function handleImport() {
             const fileInput = document.getElementById('import-file');
             const status = document.getElementById('import-status');
             const token = localStorage.getItem('jwtToken');
 
             if (!token) {
-                status.textContent = '请先登录。';
-                status.style.color = 'red';
-                return;
+                status.textContent = '请先登录。'; status.style.color = 'red'; return;
             }
             if (fileInput.files.length === 0) {
-                status.textContent = '请选择一个 JSON 文件。';
-                status.style.color = 'red';
-                return;
+                status.textContent = '请选择一个 CSV 或 JSON 文件。'; status.style.color = 'red'; return;
             }
 
             const file = fileInput.files[0];
@@ -155,12 +212,18 @@ const FRONTEND_HTML = `
             reader.onload = async function (e) {
                 try {
                     const content = e.target.result;
-                    const materialsArray = JSON.parse(content);
+                    let materialsArray;
+                    
+                    if (file.name.toLowerCase().endsWith('.json')) {
+                        materialsArray = JSON.parse(content);
+                    } else if (file.name.toLowerCase().endsWith('.csv')) {
+                        materialsArray = parseCSV(content);
+                    } else {
+                        status.textContent = '不支持的文件类型。'; status.style.color = 'red'; return;
+                    }
 
                     if (!Array.isArray(materialsArray)) {
-                        status.textContent = '文件格式错误：请确保文件内容是一个 JSON 数组 ([...])。';
-                        status.style.color = 'red';
-                        return;
+                        status.textContent = '文件内容错误：请确保是 JSON 数组或格式正确的 CSV。'; status.style.color = 'red'; return;
                     }
 
                     status.textContent = \`正在导入 \${materialsArray.length} 条数据...\`;
@@ -180,13 +243,12 @@ const FRONTEND_HTML = `
                     if (response.ok && result.status === 'success') {
                         status.textContent = \`导入成功！总计处理 \${result.total_processed} 条，导入/更新 \${result.imported_count} 条。\`;
                         status.style.color = 'green';
-                        if (result.errors.length > 0) {
-                             status.textContent += \` (\${result.errors.length} 条记录因缺少 UID 被跳过)\`;
+                        if (result.errors && result.errors.length > 0) {
+                             status.textContent += \` (\${result.errors.length} 条记录处理失败)\`;
                         }
-                        // 导入成功后自动查询最新数据
                         fetchMaterials();
                     } else {
-                        status.textContent = \`导入失败: \${result.errors ? result.errors.join('; ') : response.statusText}\`;
+                        status.textContent = \`导入失败: \${result.message || response.statusText}\`;
                         status.style.color = 'red';
                     }
 
@@ -201,6 +263,7 @@ const FRONTEND_HTML = `
 
         // --- 登录/退出功能 ---
         async function handleLogin() {
+            // ... (与之前相同) ...
             const username = document.getElementById('username').value;
             const password = document.getElementById('password').value;
             const status = document.getElementById('login-status');
@@ -241,8 +304,33 @@ const FRONTEND_HTML = `
             document.getElementById('login-status').style.color = 'green';
         }
 
-        // --- 查询功能 (不变) ---
+        // --- 查询和删除功能 ---
+        
+        async function handleDelete(uid) {
+            if (!confirm(\`确定要删除 UID 为 \${uid} 的材料记录吗？\n此操作不可逆！\u200C\)) return;
+
+            const token = localStorage.getItem('jwtToken');
+            try {
+                const response = await fetch(\`\${API_BASE_URL}/materials/\${uid}\`, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': \`Bearer \${token}\` }
+                });
+
+                if (response.ok) {
+                    alert(\`记录 \${uid} 删除成功！\`);
+                    fetchMaterials(); // 刷新列表
+                } else if (response.status === 404) {
+                    alert(\`删除失败：记录 \${uid} 未找到。\`);
+                } else {
+                    alert(\`删除失败: \${response.statusText}\`);
+                }
+            } catch (error) {
+                alert('网络错误，删除失败。');
+            }
+        }
+
         async function fetchMaterials() {
+            // ... (与之前相同) ...
             const query = document.getElementById('search-query').value;
             const token = localStorage.getItem('jwtToken');
             const body = document.getElementById('results-body');
@@ -290,7 +378,8 @@ const FRONTEND_HTML = `
                 } else if (mat.length_mm && mat.width_mm) {
                     dimensions = \`\${mat.length_mm} x \${mat.width_mm}\`;
                 }
-
+                
+                // 图片单元格
                 const imgCell = row.insertCell();
                 if (mat.image_url) {
                     imgCell.innerHTML = \`<img src="\${mat.image_url}" class="material-img" alt="\${mat.unified_name}">\`;
@@ -298,12 +387,25 @@ const FRONTEND_HTML = `
                     imgCell.textContent = '-';
                 }
                 
+                // 仅显示关键信息，将图片Key和操作按钮放在一起
                 row.insertCell().textContent = mat.UID;
                 row.insertCell().textContent = mat.unified_name;
-                row.insertCell().textContent = mat.sub_category || '-';
-                row.insertCell().textContent = mat.material_type;
-                row.insertCell().textContent = mat.model_number || '-';
-                row.insertCell().textContent = dimensions;
+                row.insertCell().innerHTML = \`材质: \${mat.material_type || '-'} <br> 小类: \${mat.sub_category || '-'}\`;
+                row.insertCell().innerHTML = \`型号: \${mat.model_number || '-'} <br> 尺寸: \${dimensions}\`;
+
+                // R2 Key / 图片上传占位
+                const r2KeyCell = row.insertCell();
+                r2KeyCell.innerHTML = \`
+                    <input type="text" value="\${mat.r2_image_key || ''}" style="width: 100%; font-size: 0.8em;" readonly>
+                    <small>
+                    * 实际上传功能需集成R2签名，此为路径占位。
+                    </small>
+                \`;
+
+                // 操作按钮
+                const actionsCell = row.insertCell();
+                actionsCell.innerHTML = \`<button class="delete-btn" onclick="handleDelete('\${mat.UID}')">删除</button>\`;
+                actionsCell.style.textAlign = 'center';
             });
         }
     </script>
@@ -311,7 +413,7 @@ const FRONTEND_HTML = `
 </html>
 `; 
 
-// --- Worker 后端逻辑 (不变) ---
+// --- Worker 后端逻辑 ---
 
 // ⚠️ 密码比较占位：用于生产环境，与 schema.sql 保持一致
 async function comparePassword(password, storedHash, env) {
@@ -457,7 +559,11 @@ async function handleImportMaterials(request, env) {
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).bind(
                 mat.UID, mat.unified_name, mat.material_type, mat.sub_category, mat.alias, 
-                mat.color, mat.model_number, mat.length_mm, mat.width_mm, mat.diameter_mm, mat.r2_image_key
+                mat.color, mat.model_number, 
+                parseFloat(mat.length_mm) || null, // 确保数字类型
+                parseFloat(mat.width_mm) || null,
+                parseFloat(mat.diameter_mm) || null, 
+                mat.r2_image_key
             );
         }).filter(stmt => stmt !== null);
         
@@ -484,6 +590,38 @@ async function handleImportMaterials(request, env) {
     }
 }
 
+// 新增：删除材料 API
+async function handleDeleteMaterial(request, env) {
+    const url = new URL(request.url);
+    // 路径应该像 /api/materials/UID-12345
+    const parts = url.pathname.split('/');
+    const uid = parts[parts.length - 1]; 
+
+    if (!uid) {
+        return new Response(JSON.stringify({ message: 'Missing Material UID' }), { status: 400 });
+    }
+
+    try {
+        // R2 删除逻辑 (可选, 略过以简化)
+        
+        const result = await env.DB.prepare("DELETE FROM materials WHERE UID = ?").bind(uid).run();
+        
+        if (result.changes === 0) {
+            return new Response(JSON.stringify({ status: 'not found', message: `Material with UID ${uid} not found.` }), { 
+                status: 404, 
+                headers: { 'Content-Type': 'application/json' }
+            });
+        }
+
+        return new Response(JSON.stringify({ status: 'success', message: `Material ${uid} deleted.` }), { 
+            headers: { 'Content-Type': 'application/json' }
+        });
+    } catch (e) {
+        console.error("Delete error:", e);
+        return new Response(JSON.stringify({ message: `Delete Failed: ${e.message}` }), { status: 500 });
+    }
+}
+
 
 // --- 主要 Worker 入口 ---
 
@@ -497,7 +635,7 @@ export default {
         const headers = { 
             'Content-Type': 'application/json',
             'Access-Control-Allow-Origin': '*', 
-            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+            'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS', // 增加 DELETE
             'Access-Control-Allow-Headers': 'Content-Type, Authorization',
         };
 
@@ -520,6 +658,11 @@ export default {
             const authResult = await authenticate(request, env);
             if (!authResult.authorized) {
                 return new Response('Authentication Required or Forbidden', { status: authResult.status, headers });
+            }
+            
+            // DELETE /api/materials/:uid
+            if (path.startsWith('/api/materials/') && method === 'DELETE') {
+                return handleDeleteMaterial(request, env);
             }
 
             if (path === '/api/materials' && method === 'GET') {
