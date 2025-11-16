@@ -169,17 +169,17 @@ const FRONTEND_HTML = `
                         <label for="f_UID">唯一识别码 (UID) *</label>
                         <input type="text" id="f_UID" name="UID" required>
                     </div>
-                    <div class="form-group" style="flex: 2;">
+                    <div class="form-group">
                         <label for="f_notes">备注信息</label>
                         <textarea id="f_notes" name="notes" rows="1" placeholder="例如：采购信息、使用说明等"></textarea>
                     </div>
-                </div>
-                
-                <div class="form-row">
-                     <div class="form-group">
+                    <div class="form-group">
                         <label for="f_alias">别名</label>
                         <input type="text" id="f_alias" name="alias">
                     </div>
+                </div>
+
+                <div class="form-row">
                     <div class="form-group" style="flex: 3;">
                         <label for="f_r2_image_key">R2 图片路径 (r2_image_key)</label>
                         <div class="upload-controls">
@@ -219,8 +219,7 @@ const FRONTEND_HTML = `
                         <th style="width: 7%;">直径</th>
                         <th style="width: 7%;">颜色</th>
                         <th style="width: 10%;">唯一识别码(UID)</th>
-                        <th style="width: 10%;">备注信息</th> 
-                        <th id="actions-header" style="width: 6%;">操作</th>
+                        <th style="width: 10%;">备注信息</th> <th id="actions-header" style="width: 6%;">操作</th>
                     </tr>
                 </thead>
                 <tbody id="results-body">
@@ -231,8 +230,12 @@ const FRONTEND_HTML = `
 
     <script>
         const API_BASE_URL = '/api'; 
-        // 增加 notes 字段，保持 UID 优先的逻辑顺序，notes 放在 alias 之前。
-        const FIELD_NAMES = ["UID", "unified_name", "material_type", "sub_category", "model_number", "length_mm", "width_mm", "diameter_mm", "color", "alias", "notes", "r2_image_key"];
+        // 按照新的表格顺序重新定义字段数组，确保 notes 字段加入
+        const FIELD_NAMES = [
+            "unified_name", "material_type", "sub_category", "model_number", 
+            "length_mm", "width_mm", "diameter_mm", "color", 
+            "UID", "notes", "alias", "r2_image_key" // notes 和 UID 顺序互换，notes 加入
+        ];
         let isReadOnly = false;
 
         window.onload = function() {
@@ -288,6 +291,7 @@ const FRONTEND_HTML = `
 
         function getFormData() {
             const data = {};
+            // 使用新的 FIELD_NAMES 顺序遍历
             FIELD_NAMES.forEach(name => {
                 const element = document.getElementById('f_' + name);
                 if (element) {
@@ -418,7 +422,7 @@ const FRONTEND_HTML = `
                     }
                 });
 
-                // 兼容旧格式或简单CSV
+                // 兼容旧格式或简单CSV（按顺序匹配）
                 if (Object.keys(item).length < 3) { 
                     item = {};
                     FIELD_NAMES.forEach((field, index) => {
@@ -898,16 +902,18 @@ async function handleCreateUpdateMaterial(request, env) {
     }
 
     try {
+        // 更新 SQL 语句以包含 notes 字段
         const stmt = env.DB.prepare(`
             INSERT OR REPLACE INTO materials 
-            (UID, unified_name, material_type, sub_category, alias, color, model_number, length_mm, width_mm, diameter_mm, r2_image_key, notes)
+            (UID, unified_name, material_type, sub_category, model_number, length_mm, width_mm, diameter_mm, color, notes, alias, r2_image_key)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).bind(
-            mat.UID, mat.unified_name, mat.material_type, mat.sub_category, mat.alias, 
-            mat.color, mat.model_number, 
+            mat.UID, mat.unified_name, mat.material_type, mat.sub_category, mat.model_number, 
             mat.length_mm, mat.width_mm, mat.diameter_mm, 
-            mat.r2_image_key || null,
-            mat.notes || null // 新增 notes 字段绑定
+            mat.color,
+            mat.notes || null, // 新增 notes 字段绑定
+            mat.alias,
+            mat.r2_image_key || null
         );
 
         await stmt.run();
@@ -924,7 +930,7 @@ async function handleCreateUpdateMaterial(request, env) {
 
 
 async function handleQueryMaterials(request, env) {
-    // *** 后端 D1 SQL 语句增加 notes 字段 ***
+    // *** 后端 D1 SQL 语句增加 notes 字段的查询 ***
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
@@ -936,12 +942,13 @@ async function handleQueryMaterials(request, env) {
         
         if (query) {
             const searchPattern = `%${query}%`;
+            // 增加 notes 字段到 WHERE 子句
             stmt = env.DB.prepare(`
                 SELECT * FROM materials 
                 WHERE UID LIKE ? OR unified_name LIKE ? 
                    OR alias LIKE ? OR sub_category LIKE ? OR model_number LIKE ? OR notes LIKE ?
                 LIMIT 100
-            `).bind(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern); // 新增 notes 搜索
+            `).bind(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern); 
         } else {
             stmt = env.DB.prepare("SELECT * FROM materials LIMIT 100");
         }
@@ -989,18 +996,20 @@ async function handleImportMaterials(request, env) {
                 errorMessages.push(`Missing UID for material: ${mat.unified_name || 'unknown'}`);
                 return null;
             }
+            // 更新 SQL 语句以包含 notes 字段
             return env.DB.prepare(`
                 INSERT OR REPLACE INTO materials 
-                (UID, unified_name, material_type, sub_category, alias, color, model_number, length_mm, width_mm, diameter_mm, r2_image_key, notes)
+                (UID, unified_name, material_type, sub_category, model_number, length_mm, width_mm, diameter_mm, color, notes, alias, r2_image_key)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).bind(
-                mat.UID, mat.unified_name, mat.material_type, mat.sub_category, mat.alias, 
-                mat.color, mat.model_number, 
-                parseFloat(mat.length_mm) || null, 
+                mat.UID, mat.unified_name, mat.material_type, mat.sub_category, mat.model_number, 
+                parseFloat(mat.length_mm) || null, // 确保数字类型
                 parseFloat(mat.width_mm) || null,
-                parseFloat(mat.diameter_mm) || null, 
-                mat.r2_image_key || null,
-                mat.notes || null // 新增 notes 字段绑定
+                parseFloat(mat.diameter_mm) || null,
+                mat.color,
+                mat.notes || null, // 新增 notes 字段绑定
+                mat.alias,
+                mat.r2_image_key || null
             );
         }).filter(stmt => stmt !== null);
         
