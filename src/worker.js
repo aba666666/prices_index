@@ -1,7 +1,7 @@
 // src/worker.js
 import * as jwt from '@tsndr/cloudflare-worker-jwt';
 
-// --- 完整的内嵌前端 HTML/JS (已更新布局、访客逻辑和 CSV 解析, 调整字段顺序) ---
+// --- 完整的内嵌前端 HTML/JS (已更新布局、访客逻辑和 CSV 解析) ---
 const FRONTEND_HTML = `
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -157,21 +157,21 @@ const FRONTEND_HTML = `
                         <label for="f_color">颜色</label>
                         <input type="text" id="f_color" name="color">
                     </div>
+                </div>
+                <div class="form-row">
                     <div class="form-group">
                         <label for="f_UID">唯一识别码 (UID) *</label>
                         <input type="text" id="f_UID" name="UID" required>
                     </div>
-                </div>
-                <div class="form-row">
-                     <div class="form-group">
+                    <div class="form-group">
                         <label for="f_alias">别名</label>
                         <input type="text" id="f_alias" name="alias">
                     </div>
-                    <div class="form-group" style="flex: 3;">
+                    <div class="form-group" style="flex: 2;">
                         <label for="f_r2_image_key">R2 图片路径 (r2_image_key)</label>
                         <div class="upload-controls">
-                            <input type="text" id="f_r2_image_key" name="r2_image_key" placeholder="例如: folder/image.jpg" style="width: 50%; margin: 0;">
-                            <input type="file" id="f_image_file" accept="image/*" style="width: 30%; margin: 0;">
+                            <input type="text" id="f_r2_image_key" name="r2_image_key" placeholder="例如: folder/image.jpg" style="width: 60%; margin: 0;">
+                            <input type="file" id="f_image_file" accept="image/*" style="width: 40%; margin: 0;">
                             <button type="button" onclick="handleImageUpload()" id="upload-btn" style="flex-shrink: 0; padding: 5px 10px;">上传图片</button>
                         </div>
                     </div>
@@ -183,7 +183,7 @@ const FRONTEND_HTML = `
 
         <div id="import-section">
             <h2>📤 批量导入 (支持 CSV / JSON)</h2>
-            <p style="font-size: 0.9em; color: #555;">CSV 文件第一行 (表头) 必须包含以下字段的中文或英文名，顺序不限，但建议：统一名称, 材质(大类), 小类, 型号, 长度(mm), 宽度(mm), 直径(mm), 颜色, 唯一识别码(UID), 别名, R2图片路径。</p>
+            <p style="font-size: 0.9em; color: #555;">CSV 文件第一行 (表头) 必须包含以下字段的中文或英文名，顺序不限，但建议：统一名称, 材质(大类), 小类, 型号, 长度(mm), 宽度(mm), 直径(mm), 颜色, 唯一识别码(UID)。</p>
             <input type="file" id="import-file" accept=".json, .csv">
             <button onclick="handleBulkImport()" id="import-btn">解析并导入数据</button>
             <p id="import-status" style="color: blue;"></p>
@@ -217,8 +217,8 @@ const FRONTEND_HTML = `
 
     <script>
         const API_BASE_URL = '/api'; 
-        // 完整的数据库字段列表，顺序调整为与表格内容列大致一致：
-        const FIELD_NAMES = ["unified_name", "material_type", "sub_category", "model_number", "length_mm", "width_mm", "diameter_mm", "color", "UID", "alias", "r2_image_key"];
+        // 完整的数据库字段列表，用于表单和 CSV 解析映射
+        const FIELD_NAMES = ["UID", "unified_name", "material_type", "sub_category", "alias", "color", "model_number", "length_mm", "width_mm", "diameter_mm", "r2_image_key"];
         let isReadOnly = false;
 
         window.onload = function() {
@@ -264,8 +264,7 @@ const FRONTEND_HTML = `
 
         function getFormData() {
             const data = {};
-            // 遍历所有可能的字段
-            ["UID", "unified_name", "material_type", "sub_category", "alias", "color", "model_number", "length_mm", "width_mm", "diameter_mm", "r2_image_key"].forEach(name => {
+            FIELD_NAMES.forEach(name => {
                 const element = document.getElementById('f_' + name);
                 if (element) {
                     if (name.endsWith('_mm')) {
@@ -373,13 +372,12 @@ const FRONTEND_HTML = `
             }
         }
 
-        // --- 3. 批量导入 (已优化 CSV 解析逻辑和乱码修复) ---
+        // --- 3. 批量导入 (已优化 CSV 解析逻辑) ---
         
         function parseCSV(csvText) {
             const lines = csvText.trim().split(/\\r?\\n/); 
             if (lines.length === 0) return [];
             
-            // 完整字段列表
             const TARGET_FIELDS = ["UID", "unified_name", "material_type", "sub_category", "alias", "color", "model_number", "length_mm", "width_mm", "diameter_mm", "r2_image_key"];
             
             // 1. 解析表头并进行标准化映射
@@ -411,8 +409,7 @@ const FRONTEND_HTML = `
 
                 headers.forEach((header, index) => {
                     if (index < values.length) {
-                        // 移除前后的空格和引号
-                        const rawValue = values[index].trim().replace(/['"“”]+/g, ''); 
+                        const rawValue = values[index].trim().replace(/['"“”]+/g, '');
                         
                         // 严格匹配 TARGET_FIELDS
                         if (TARGET_FIELDS.includes(header)) {
@@ -424,9 +421,7 @@ const FRONTEND_HTML = `
                 // 3. 转换数字类型
                 ['length_mm', 'width_mm', 'diameter_mm'].forEach(key => {
                     if (item[key]) {
-                        // 尝试将逗号替换成点，以支持欧洲格式的数字
-                        const cleanValue = String(item[key]).replace(',', '.'); 
-                        const num = parseFloat(cleanValue);
+                        const num = parseFloat(item[key]);
                         item[key] = isNaN(num) ? null : num;
                     } else {
                         item[key] = null;
@@ -458,20 +453,13 @@ const FRONTEND_HTML = `
 
             reader.onload = async function (e) {
                 try {
-                    let content;
+                    const content = e.target.result;
                     let materialsArray;
                     
                     if (file.name.toLowerCase().endsWith('.json')) {
-                         // JSON 文件直接解析
-                        content = e.target.result;
                         materialsArray = JSON.parse(content);
                     } else if (file.name.toLowerCase().endsWith('.csv')) {
-                         // CSV 乱码修复：使用 TextDecoder('utf-8')
-                        const arrayBuffer = e.target.result;
-                        // 尝试使用 UTF-8 解码，这是最常见的编码
-                        const decoder = new TextDecoder('utf-8');
-                        content = decoder.decode(arrayBuffer); 
-                        materialsArray = parseCSV(content); 
+                        materialsArray = parseCSV(content); // 使用新的解析函数
                     } else {
                         status.textContent = '不支持的文件类型。'; status.style.color = 'red'; return;
                     }
@@ -511,12 +499,7 @@ const FRONTEND_HTML = `
                 }
             };
 
-            // CSV/JSON 文件读取方式调整
-            if (file.name.toLowerCase().endsWith('.csv')) {
-                 reader.readAsArrayBuffer(file); // 读取 ArrayBuffer 用于 TextDecoder
-            } else {
-                 reader.readAsText(file); // JSON 文件还是读文本
-            }
+            reader.readAsText(file);
         }
 
         // --- 4. 删除 ---
@@ -562,8 +545,8 @@ const FRONTEND_HTML = `
             document.getElementById('manual-status').style.color = '#17a2b8';
             document.getElementById('f_UID').disabled = true; // 编辑时 UID 不可修改
             
-            // 填充表单 (注意：这里使用新的全字段列表来确保完整填充)
-            ["UID", "unified_name", "material_type", "sub_category", "alias", "color", "model_number", "length_mm", "width_mm", "diameter_mm", "r2_image_key"].forEach(name => {
+            // 填充表单
+            FIELD_NAMES.forEach(name => {
                 const element = document.getElementById('f_' + name);
                 if (element && material[name] !== undefined) {
                     element.value = material[name];
@@ -679,20 +662,17 @@ const FRONTEND_HTML = `
                 body.innerHTML = '<tr><td colspan="10" style="text-align: center;">未找到匹配的材料。</td></tr>';
                 return;
             }
-            
-            // 确保 actions-header 总是存在
-            const actionsHeader = document.getElementById('actions-header');
 
             materials.forEach(mat => {
                 const row = body.insertRow();
                 
                 // 规格/尺寸 字段合并：长度 x 宽度
                 let dimensions = '';
-                if (mat.length_mm !== null && mat.width_mm !== null) {
+                if (mat.length_mm && mat.width_mm) {
                     dimensions = \`\${mat.length_mm} x \${mat.width_mm} mm\`;
-                } else if (mat.length_mm !== null) {
+                } else if (mat.length_mm) {
                     dimensions = \`\${mat.length_mm} mm\`;
-                } else if (mat.width_mm !== null) {
+                } else if (mat.width_mm) {
                     dimensions = \`\${mat.width_mm} mm\`;
                 }
                 
@@ -722,7 +702,7 @@ const FRONTEND_HTML = `
                 row.insertCell().textContent = dimensions || '-';
                 
                 // 7. 直径
-                row.insertCell().textContent = mat.diameter_mm !== null ? \`Ø\${mat.diameter_mm} mm\` : '-';
+                row.insertCell().textContent = mat.diameter_mm ? \`Ø\${mat.diameter_mm} mm\` : '-';
 
                 // 8. 颜色
                 row.insertCell().textContent = mat.color || '-';
@@ -738,8 +718,6 @@ const FRONTEND_HTML = `
                         <button class="delete-btn" onclick="handleDelete('\${mat.UID}')">删除</button>
                     \`;
                     actionsCell.style.textAlign = 'center';
-                    // 确保单元格可见
-                    actionsCell.style.display = 'table-cell'; 
                 } else {
                     actionsCell.textContent = '只读'; 
                     actionsCell.style.textAlign = 'center';
@@ -750,11 +728,11 @@ const FRONTEND_HTML = `
             
              // 确保表格的头部和主体在访客模式下保持一致
             if (isReadOnly) {
-                 actionsHeader.style.display = 'none';
+                 document.getElementById('actions-header').style.display = 'none';
                  // 重新调整表格布局以适应列的隐藏
                  document.getElementById('results-table').style.tableLayout = 'auto'; 
             } else {
-                 actionsHeader.style.display = 'table-cell';
+                 document.getElementById('actions-header').style.display = 'table-cell';
                  document.getElementById('results-table').style.tableLayout = 'fixed'; 
             }
         }
