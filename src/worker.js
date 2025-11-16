@@ -128,10 +128,6 @@ const FRONTEND_HTML = `
             <form id="material-form">
                 <div class="form-row">
                     <div class="form-group">
-                        <label for="f_UID">唯一识别码 (UID) *</label>
-                        <input type="text" id="f_UID" name="UID" required>
-                    </div>
-                    <div class="form-group">
                         <label for="f_unified_name">统一名称 *</label>
                         <input type="text" id="f_unified_name" name="unified_name" required>
                     </div>
@@ -143,13 +139,13 @@ const FRONTEND_HTML = `
                         <label for="f_sub_category">小类</label>
                         <input type="text" id="f_sub_category" name="sub_category">
                     </div>
-                </div>
-                
-                <div class="form-row">
                     <div class="form-group">
                         <label for="f_model_number">型号</label>
                         <input type="text" id="f_model_number" name="model_number">
                     </div>
+                </div>
+                
+                <div class="form-row">
                     <div class="form-group">
                         <label for="f_length_mm">长度 (mm)</label>
                         <input type="number" step="0.01" id="f_length_mm" name="length_mm">
@@ -162,16 +158,16 @@ const FRONTEND_HTML = `
                         <label for="f_diameter_mm">直径 (mm)</label>
                         <input type="number" step="0.01" id="f_diameter_mm" name="diameter_mm">
                     </div>
-                </div>
-                
-                <div class="form-row">
                     <div class="form-group">
                         <label for="f_color">颜色</label>
                         <input type="text" id="f_color" name="color">
                     </div>
+                </div>
+                
+                <div class="form-row">
                     <div class="form-group">
-                        <label for="f_alias">别名</label>
-                        <input type="text" id="f_alias" name="alias">
+                        <label for="f_UID">唯一识别码 (UID) *</label>
+                        <input type="text" id="f_UID" name="UID" required>
                     </div>
                     <div class="form-group" style="flex: 2;">
                         <label for="f_notes">备注信息</label>
@@ -180,7 +176,11 @@ const FRONTEND_HTML = `
                 </div>
                 
                 <div class="form-row">
-                    <div class="form-group full-width-group">
+                     <div class="form-group">
+                        <label for="f_alias">别名</label>
+                        <input type="text" id="f_alias" name="alias">
+                    </div>
+                    <div class="form-group" style="flex: 3;">
                         <label for="f_r2_image_key">R2 图片路径 (r2_image_key)</label>
                         <div class="upload-controls">
                             <input type="text" id="f_r2_image_key" name="r2_image_key" placeholder="例如: folder/image.jpg" style="width: 60%; margin: 0;">
@@ -219,7 +219,8 @@ const FRONTEND_HTML = `
                         <th style="width: 7%;">直径</th>
                         <th style="width: 7%;">颜色</th>
                         <th style="width: 10%;">唯一识别码(UID)</th>
-                        <th style="width: 10%;">备注信息</th> <th id="actions-header" style="width: 6%;">操作</th>
+                        <th style="width: 10%;">备注信息</th> 
+                        <th id="actions-header" style="width: 6%;">操作</th>
                     </tr>
                 </thead>
                 <tbody id="results-body">
@@ -230,7 +231,7 @@ const FRONTEND_HTML = `
 
     <script>
         const API_BASE_URL = '/api'; 
-        // 更新 FIELD_NAMES，新增 notes，并调整顺序以匹配逻辑分组
+        // 保持 FIELD_NAMES 顺序，UID 优先，notes 在 alias 之前（这是CSV回退逻辑的顺序，与前端显示顺序不同，但保证数据结构稳定）
         const FIELD_NAMES = ["UID", "unified_name", "material_type", "sub_category", "model_number", "length_mm", "width_mm", "diameter_mm", "color", "alias", "notes", "r2_image_key"];
         let isReadOnly = false;
 
@@ -418,7 +419,8 @@ const FRONTEND_HTML = `
                 });
 
                 // 兼容旧格式或简单CSV
-                if (Object.keys(item).length < 3) {
+                // 由于 FIELD_NAMES 中 UID 处于第一位，所以此回退逻辑保证了 UID 优先
+                if (Object.keys(item).length < 3) { 
                     item = {};
                     FIELD_NAMES.forEach((field, index) => {
                         if (index < values.length) {
@@ -701,7 +703,7 @@ const FRONTEND_HTML = `
                 // 8. 颜色
                 row.insertCell().textContent = mat.color || '-';
                 
-                // 9. 唯一识别码(UID)
+                // 9. 唯一识别码(UID) - 在备注信息前
                 row.insertCell().textContent = mat.UID;
                 
                 // 10. 备注信息 (新增)
@@ -885,7 +887,7 @@ async function handleDirectUpload(request, env) {
 }
 
 async function handleCreateUpdateMaterial(request, env) {
-    // *** 核心修改 1: 新增 notes 字段到 INSERT/REPLACE 语句 ***
+    // *** 后端逻辑保持不变，notes 在 SQL 语句中已正确包含 ***
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
@@ -906,7 +908,7 @@ async function handleCreateUpdateMaterial(request, env) {
             mat.color, mat.model_number, 
             mat.length_mm, mat.width_mm, mat.diameter_mm, 
             mat.r2_image_key || null,
-            mat.notes || null // 新增 notes 绑定
+            mat.notes || null 
         );
 
         await stmt.run();
@@ -923,7 +925,7 @@ async function handleCreateUpdateMaterial(request, env) {
 
 
 async function handleQueryMaterials(request, env) {
-    // *** 核心修改 2: 更新 SELECT * 语句，确保 notes 字段在 results 中 ***
+    // *** 后端逻辑保持不变，notes 在 SELECT 语句中已正确包含 ***
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
@@ -940,7 +942,7 @@ async function handleQueryMaterials(request, env) {
                 WHERE UID LIKE ? OR unified_name LIKE ? 
                    OR alias LIKE ? OR sub_category LIKE ? OR model_number LIKE ? OR notes LIKE ?
                 LIMIT 100
-            `).bind(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern); // 允许搜索 notes
+            `).bind(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern); 
         } else {
             stmt = env.DB.prepare("SELECT * FROM materials LIMIT 100");
         }
@@ -964,7 +966,7 @@ async function handleQueryMaterials(request, env) {
 
 
 async function handleImportMaterials(request, env) {
-    // *** 核心修改 3: 新增 notes 字段到 BATCH 导入语句 ***
+    // *** 后端逻辑保持不变，notes 在 BATCH 导入语句中已正确包含 ***
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
@@ -995,11 +997,11 @@ async function handleImportMaterials(request, env) {
             `).bind(
                 mat.UID, mat.unified_name, mat.material_type, mat.sub_category, mat.alias, 
                 mat.color, mat.model_number, 
-                parseFloat(mat.length_mm) || null, // 确保数字类型
+                parseFloat(mat.length_mm) || null, 
                 parseFloat(mat.width_mm) || null,
                 parseFloat(mat.diameter_mm) || null, 
                 mat.r2_image_key || null,
-                mat.notes || null // 新增 notes 绑定
+                mat.notes || null 
             );
         }).filter(stmt => stmt !== null);
         
