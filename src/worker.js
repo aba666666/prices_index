@@ -1,7 +1,7 @@
 // src/worker.js
 import * as jwt from '@tsndr/cloudflare-worker-jwt';
 
-// --- 完整的内嵌前端 HTML/JS (新增了手动编辑和图片上传功能) ---
+// --- 完整的内嵌前端 HTML/JS (已更新 handleImageUpload 函数) ---
 const FRONTEND_HTML = `
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -268,7 +268,7 @@ const FRONTEND_HTML = `
             }
         }
 
-        // --- 2. 图片上传 ---
+        // --- 2. 图片上传 (已修改为直接上传到 Worker) ---
 
         async function handleImageUpload() {
             const fileInput = document.getElementById('f_image_file');
@@ -278,39 +278,35 @@ const FRONTEND_HTML = `
             
             if (!token) { status.textContent = '请先登录。'; status.style.color = 'red'; return; }
             if (fileInput.files.length === 0) { status.textContent = '请选择图片文件。'; status.style.color = 'red'; return; }
+            
             const file = fileInput.files[0];
+            // 如果 Key 为空，则生成一个默认 Key
             const r2Key = keyInput.value.trim() || \`uploads/\${Date.now()}/\${file.name}\`;
             
-            status.textContent = '正在请求 R2 签名链接...';
+            status.textContent = '正在直接上传文件到 Worker...';
             status.style.color = 'blue';
 
             try {
-                // 1. 获取预签名 URL
-                const signResponse = await fetch(\`\${API_BASE_URL}/presign-url\`, {
+                // 1. 构造 FormData
+                const formData = new FormData();
+                formData.append('file', file);
+                formData.append('key', r2Key);
+                
+                // 2. 发送请求到新的直接上传 API (/api/upload)
+                const uploadResponse = await fetch(\`\${API_BASE_URL}/upload\`, {
                     method: 'POST',
-                    headers: getAuthHeaders(),
-                    body: JSON.stringify({ key: r2Key })
-                });
-                
-                if (!signResponse.ok) {
-                    const errorDetails = await signResponse.json().catch(() => ({ message: signResponse.statusText }));
-                    throw new Error(\`签名失败: \${errorDetails.message} (\${signResponse.status})\`);
-                }
-
-                const { uploadUrl } = await signResponse.json();
-                
-                // 2. 直接上传到 R2
-                status.textContent = '正在上传文件到 R2...';
-                const uploadResponse = await fetch(uploadUrl, {
-                    method: 'PUT',
                     headers: {
-                        'Content-Type': file.type || 'application/octet-stream',
-                        'Content-Length': file.size
+                        // 注意：使用 FormData 时，浏览器会自动设置 Content-Type 为 multipart/form-data
+                        'Authorization': 'Bearer ' + token
                     },
-                    body: file
+                    body: formData // 直接发送 FormData
                 });
                 
-                if (!uploadResponse.ok) throw new Error(\`上传失败: \${uploadResponse.statusText}\`);
+                const result = await uploadResponse.json();
+                
+                if (!uploadResponse.ok || result.status !== 'success') {
+                     throw new Error(result.message || uploadResponse.statusText);
+                }
 
                 // 3. 更新表单字段
                 keyInput.value = r2Key; 
@@ -617,7 +613,6 @@ const FRONTEND_HTML = `
 
 // --- Worker 后端逻辑 ---
 
-// ⚠️ 密码比较占位：用于生产环境，与 schema.sql 保持一致
 async function comparePassword(password, storedHash, env) {
     // 假设您的 D1 数据库中存储的是 'testpass' 
     return password === storedHash;
@@ -706,48 +701,46 @@ async function handleLogin(request, env) {
     }
 }
 
-// 🚨 修复后的 R2 预签名函数 (使用 R2_STORAGE)
-async function handleGeneratePresignedUrl(request, env) {
+// 🚨 新增：直接上传处理函数 (Direct Upload) - 替换了 presigned-url 逻辑
+async function handleDirectUpload(request, env) {
     const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
 
-    // 🚨 检查新的绑定名称 R2_STORAGE
-    if (!env.R2_STORAGE) {
-        // 如果绑定完全丢失，则返回此信息
+    if (!env.R2_MEDIA) {
         return new Response(JSON.stringify({ 
-            message: 'R2_STORAGE binding is missing. CHECK WRANGLER.TOML and DEPLOYMENT.',
-            debug: 'R2_STORAGE is null or undefined.'
+            message: 'R2_MEDIA binding is missing. CHECK WRANGLER.TOML and DEPLOYMENT.'
         }), { status: 500, headers });
     }
     
+    if (request.headers.get('Content-Type')?.includes('multipart/form-data') === false) {
+         return new Response(JSON.stringify({ message: 'Missing or wrong Content-Type header. Expected multipart/form-data.' }), { status: 400, headers });
+    }
+
     try {
-        const { key } = await request.json();
-        if (!key) {
-            return new Response(JSON.stringify({ message: 'Missing R2 key.' }), { status: 400, headers });
+        const formData = await request.formData();
+        const file = formData.get('file'); // 接收前端的 Blob/File
+        const r2Key = formData.get('key'); // 接收前端指定的 R2 Key
+
+        if (!file || !r2Key || typeof file === 'string') {
+            return new Response(JSON.stringify({ message: 'Missing file or R2 key in form data or file is empty.' }), { status: 400, headers });
         }
         
-        // 🚨 关键：调用 env.R2_STORAGE 上的 createPresignedUrl
-        const signedUrl = await env.R2_STORAGE.createPresignedUrl({
-            key: key,
-            method: 'PUT',
-            expiration: 60 * 5
-        });
+        // 核心变化：直接使用 put() 方法上传文件
+        await env.R2_MEDIA.put(r2Key, file.stream(), {
+            // 可选：设置 Content-Type 以确保浏览器正确显示
+            httpMetadata: { contentType: file.type || 'application/octet-stream' }
+        }); 
 
         return new Response(JSON.stringify({ 
-            uploadUrl: signedUrl.url, 
-            r2Key: key, 
-            publicDomain: env.R2_PUBLIC_DOMAIN 
-        }), {
-            headers
-        });
-        
+            status: 'success', 
+            r2Key: r2Key, 
+            message: `File ${r2Key} uploaded directly to R2.` 
+        }), { headers });
+
     } catch (e) {
-        // 返回调试信息，帮助确认绑定是否正确
-        let debugInfo = `R2_STORAGE object type: ${typeof env.R2_STORAGE}. `;
-        debugInfo += `Does it have createPresignedUrl? ${typeof env.R2_STORAGE.createPresignedUrl}`;
-        
+        console.error("Direct Upload error:", e);
         return new Response(JSON.stringify({ 
-            message: `Failed to generate presigned URL: ${e.message}.`,
-            debug: debugInfo
+            message: `Direct upload failed: ${e.message}.`,
+            debug: `R2_MEDIA object type: ${typeof env.R2_MEDIA}. Contains put? ${typeof env.R2_MEDIA?.put}`
         }), { 
             status: 500,
             headers
@@ -973,9 +966,9 @@ export default {
                 return handleQueryMaterials(request, env);
             }
             
-            // POST /api/presign-url (R2 Upload)
-            if (path === '/api/presign-url' && method === 'POST') {
-                return handleGeneratePresignedUrl(request, env); 
+            // POST /api/upload (R2 Direct Upload) - 替换了 presign-url 路由
+            if (path === '/api/upload' && method === 'POST') {
+                return handleDirectUpload(request, env); 
             }
 
             // POST /api/import (Bulk Import)
