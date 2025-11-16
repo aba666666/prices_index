@@ -1,7 +1,7 @@
 // src/worker.js
 import * as jwt from '@tsndr/cloudflare-worker-jwt';
 
-// --- 完整的内嵌前端 HTML/JS (已更新布局和访客逻辑) ---
+// --- 完整的内嵌前端 HTML/JS (已更新布局、访客逻辑和字段顺序) ---
 const FRONTEND_HTML = `
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -24,7 +24,7 @@ const FRONTEND_HTML = `
             box-shadow: 0 4px 8px rgba(0,0,0,0.1);
             border-radius: 8px;
         }
-        input:not([type="file"]):not([type="checkbox"]):not([type="radio"]), select {
+        input:not([type="file"]):not([type="checkbox"]):not([type="radio"]), select, textarea { /* 新增 textarea */
             padding: 8px;
             margin: 5px 0;
             width: 100%;
@@ -96,6 +96,10 @@ const FRONTEND_HTML = `
             border-left: 5px solid #ffc107;
             font-weight: bold;
         }
+        /* 新增样式：备注字段可以占据一行 */
+        .full-width-group {
+            flex-basis: 100%; 
+        }
     </style>
 </head>
 <body>
@@ -140,15 +144,8 @@ const FRONTEND_HTML = `
                         <input type="text" id="f_sub_category" name="sub_category">
                     </div>
                 </div>
+                
                 <div class="form-row">
-                    <div class="form-group">
-                        <label for="f_alias">别名</label>
-                        <input type="text" id="f_alias" name="alias">
-                    </div>
-                    <div class="form-group">
-                        <label for="f_color">颜色</label>
-                        <input type="text" id="f_color" name="color">
-                    </div>
                     <div class="form-group">
                         <label for="f_model_number">型号</label>
                         <input type="text" id="f_model_number" name="model_number">
@@ -157,8 +154,6 @@ const FRONTEND_HTML = `
                         <label for="f_length_mm">长度 (mm)</label>
                         <input type="number" step="0.01" id="f_length_mm" name="length_mm">
                     </div>
-                </div>
-                <div class="form-row">
                     <div class="form-group">
                         <label for="f_width_mm">宽度 (mm)</label>
                         <input type="number" step="0.01" id="f_width_mm" name="width_mm">
@@ -167,7 +162,25 @@ const FRONTEND_HTML = `
                         <label for="f_diameter_mm">直径 (mm)</label>
                         <input type="number" step="0.01" id="f_diameter_mm" name="diameter_mm">
                     </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="f_color">颜色</label>
+                        <input type="text" id="f_color" name="color">
+                    </div>
+                    <div class="form-group">
+                        <label for="f_alias">别名</label>
+                        <input type="text" id="f_alias" name="alias">
+                    </div>
                     <div class="form-group" style="flex: 2;">
+                        <label for="f_notes">备注信息</label>
+                        <textarea id="f_notes" name="notes" rows="1" placeholder="例如：采购信息、使用说明等"></textarea>
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group full-width-group">
                         <label for="f_r2_image_key">R2 图片路径 (r2_image_key)</label>
                         <div class="upload-controls">
                             <input type="text" id="f_r2_image_key" name="r2_image_key" placeholder="例如: folder/image.jpg" style="width: 60%; margin: 0;">
@@ -176,6 +189,7 @@ const FRONTEND_HTML = `
                         </div>
                     </div>
                 </div>
+                
                 <button type="submit" id="save-btn" onclick="event.preventDefault(); handleSave()">保存/更新记录</button>
                 <p id="manual-status" style="color: blue;"></p>
             </form>
@@ -202,10 +216,10 @@ const FRONTEND_HTML = `
                         <th style="width: 10%;">小类</th>
                         <th style="width: 10%;">型号</th>
                         <th style="width: 10%;">规格/尺寸</th>
-                        <th style="width: 10%;">直径</th>
-                        <th style="width: 10%;">颜色</th>
+                        <th style="width: 7%;">直径</th>
+                        <th style="width: 7%;">颜色</th>
                         <th style="width: 10%;">唯一识别码(UID)</th>
-                        <th id="actions-header" style="width: 10%;">操作</th>
+                        <th style="width: 10%;">备注信息</th> <th id="actions-header" style="width: 6%;">操作</th>
                     </tr>
                 </thead>
                 <tbody id="results-body">
@@ -216,7 +230,8 @@ const FRONTEND_HTML = `
 
     <script>
         const API_BASE_URL = '/api'; 
-        const FIELD_NAMES = ["UID", "unified_name", "material_type", "sub_category", "alias", "color", "model_number", "length_mm", "width_mm", "diameter_mm", "r2_image_key"];
+        // 更新 FIELD_NAMES，新增 notes，并调整顺序以匹配逻辑分组
+        const FIELD_NAMES = ["UID", "unified_name", "material_type", "sub_category", "model_number", "length_mm", "width_mm", "diameter_mm", "color", "alias", "notes", "r2_image_key"];
         let isReadOnly = false;
 
         window.onload = function() {
@@ -291,7 +306,7 @@ const FRONTEND_HTML = `
             const token = localStorage.getItem('jwtToken');
             const status = document.getElementById('manual-status');
             const data = getFormData();
-            // ... (省略 save 逻辑，因为与之前相同)
+            
             if (!token) { status.textContent = '请先登录。'; status.style.color = 'red'; return; }
             if (!data.UID || !data.unified_name) {
                 status.textContent = 'UID 和 统一名称 不能为空。'; status.style.color = 'red'; return;
@@ -333,7 +348,7 @@ const FRONTEND_HTML = `
             const status = document.getElementById('manual-status');
             const token = localStorage.getItem('jwtToken');
             
-            // ... (省略 upload 逻辑，因为与之前相同)
+            
             if (!token) { status.textContent = '请先登录。'; status.style.color = 'red'; return; }
             if (fileInput.files.length === 0) { status.textContent = '请选择图片文件。'; status.style.color = 'red'; return; }
             
@@ -377,7 +392,7 @@ const FRONTEND_HTML = `
         // --- 3. 批量导入 ---
         
         function parseCSV(csvText) {
-            // ... (省略 parseCSV 逻辑，因为与之前相同)
+            
             const lines = csvText.trim().split(/\\r?\\n/); 
             if (lines.length === 0) return [];
             
@@ -394,6 +409,7 @@ const FRONTEND_HTML = `
                 headers.forEach((header, index) => {
                     if (index < values.length) {
                         const key = header.toLowerCase().replace(/[^a-z0-9_]/g, ''); 
+                        // 新增 notes 匹配
                         const matchedField = FIELD_NAMES.find(f => f.toLowerCase() === key || f.toLowerCase().includes(key));
                         if (matchedField) {
                              item[matchedField] = values[index].trim().replace(/['"]+/g, '');
@@ -401,6 +417,7 @@ const FRONTEND_HTML = `
                     }
                 });
 
+                // 兼容旧格式或简单CSV
                 if (Object.keys(item).length < 3) {
                     item = {};
                     FIELD_NAMES.forEach((field, index) => {
@@ -427,7 +444,7 @@ const FRONTEND_HTML = `
 
             if (!token) { status.textContent = '请先登录。'; status.style.color = 'red'; return; }
             if (fileInput.files.length === 0) { status.textContent = '请选择一个 CSV 或 JSON 文件。'; status.style.color = 'red'; return; }
-            // ... (省略 import 逻辑，因为与之前相同)
+            
             const file = fileInput.files[0];
             const reader = new FileReader();
 
@@ -482,7 +499,7 @@ const FRONTEND_HTML = `
         async function handleDelete(uid) {
             if (isReadOnly) return alert('访客模式下禁止操作。');
             if (!confirm('确定要删除 UID 为 ' + uid + ' 的材料记录吗？\\n此操作不可逆！')) return;
-            // ... (省略 delete 逻辑，因为与之前相同)
+            
             const token = localStorage.getItem('jwtToken');
             try {
                 const response = await fetch(\`\${API_BASE_URL}/materials/\${uid}\`, {
@@ -604,10 +621,10 @@ const FRONTEND_HTML = `
             // 访客模式下也允许查询
             const token = localStorage.getItem('jwtToken'); 
             const body = document.getElementById('results-body');
-            body.innerHTML = '<tr><td colspan="10" style="text-align: center;">正在查询...</td></tr>';
+            body.innerHTML = '<tr><td colspan="11" style="text-align: center;">正在查询...</td></tr>'; // 调整列数
             
             if (!token && !isReadOnly) { // 既没Token也不是访客模式，理论上不应该发生，但作为安全检查
-                body.innerHTML = '<tr><td colspan="10" style="color: red; text-align: center;">请先登录或以访客身份查看。</td></tr>';
+                body.innerHTML = '<tr><td colspan="11" style="color: red; text-align: center;">请先登录或以访客身份查看。</td></tr>';
                 return;
             }
 
@@ -620,22 +637,23 @@ const FRONTEND_HTML = `
                     const materials = await response.json();
                     renderMaterials(materials);
                 } else if (response.status === 403 || response.status === 401) {
-                    body.innerHTML = '<tr><td colspan="10" style="color: red; text-align: center;">权限过期，请重新登录。</td></tr>';
+                    body.innerHTML = '<tr><td colspan="11" style="color: red; text-align: center;">权限过期，请重新登录。</td></tr>';
                     handleLogout();
                 } else {
-                    body.innerHTML = '<tr><td colspan="10" style="color: red; text-align: center;">查询失败: ' + response.statusText + '</td></tr>';
+                    body.innerHTML = '<tr><td colspan="11" style="color: red; text-align: center;">查询失败: ' + response.statusText + '</td></tr>';
                 }
             } catch (error) {
-                body.innerHTML = '<tr><td colspan="10" style="color: red; text-align: center;">网络错误: ' + error.message + '</td></tr>';
+                body.innerHTML = '<tr><td colspan="11" style="color: red; text-align: center;">网络错误: ' + error.message + '</td></tr>';
             }
         }
 
         function renderMaterials(materials) {
             const body = document.getElementById('results-body');
             body.innerHTML = ''; 
+            const totalCols = isReadOnly ? 10 : 11; // 访客模式下是 10 列 (不显示操作列)
 
             if (materials.length === 0) {
-                body.innerHTML = '<tr><td colspan="10" style="text-align: center;">未找到匹配的材料。</td></tr>';
+                body.innerHTML = \`<tr><td colspan="\${totalCols}" style="text-align: center;">未找到匹配的材料。</td></tr>\`;
                 return;
             }
 
@@ -685,8 +703,11 @@ const FRONTEND_HTML = `
                 
                 // 9. 唯一识别码(UID)
                 row.insertCell().textContent = mat.UID;
+                
+                // 10. 备注信息 (新增)
+                row.insertCell().textContent = mat.notes || '-';
 
-                // 10. 操作 (只在管理员模式下显示)
+                // 11. 操作 (只在管理员模式下显示)
                 if (!isReadOnly) {
                     const actionsCell = row.insertCell();
                     actionsCell.innerHTML = \`
@@ -864,7 +885,7 @@ async function handleDirectUpload(request, env) {
 }
 
 async function handleCreateUpdateMaterial(request, env) {
-    // ... (新增/编辑逻辑保持不变)
+    // *** 核心修改 1: 新增 notes 字段到 INSERT/REPLACE 语句 ***
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
@@ -878,13 +899,14 @@ async function handleCreateUpdateMaterial(request, env) {
     try {
         const stmt = env.DB.prepare(`
             INSERT OR REPLACE INTO materials 
-            (UID, unified_name, material_type, sub_category, alias, color, model_number, length_mm, width_mm, diameter_mm, r2_image_key)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (UID, unified_name, material_type, sub_category, alias, color, model_number, length_mm, width_mm, diameter_mm, r2_image_key, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).bind(
             mat.UID, mat.unified_name, mat.material_type, mat.sub_category, mat.alias, 
             mat.color, mat.model_number, 
             mat.length_mm, mat.width_mm, mat.diameter_mm, 
-            mat.r2_image_key || null
+            mat.r2_image_key || null,
+            mat.notes || null // 新增 notes 绑定
         );
 
         await stmt.run();
@@ -901,7 +923,7 @@ async function handleCreateUpdateMaterial(request, env) {
 
 
 async function handleQueryMaterials(request, env) {
-    // ... (查询逻辑保持不变)
+    // *** 核心修改 2: 更新 SELECT * 语句，确保 notes 字段在 results 中 ***
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
@@ -916,9 +938,9 @@ async function handleQueryMaterials(request, env) {
             stmt = env.DB.prepare(`
                 SELECT * FROM materials 
                 WHERE UID LIKE ? OR unified_name LIKE ? 
-                   OR alias LIKE ? OR sub_category LIKE ? OR model_number LIKE ?
+                   OR alias LIKE ? OR sub_category LIKE ? OR model_number LIKE ? OR notes LIKE ?
                 LIMIT 100
-            `).bind(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern);
+            `).bind(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern); // 允许搜索 notes
         } else {
             stmt = env.DB.prepare("SELECT * FROM materials LIMIT 100");
         }
@@ -942,7 +964,7 @@ async function handleQueryMaterials(request, env) {
 
 
 async function handleImportMaterials(request, env) {
-    // ... (导入逻辑保持不变)
+    // *** 核心修改 3: 新增 notes 字段到 BATCH 导入语句 ***
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
@@ -968,15 +990,16 @@ async function handleImportMaterials(request, env) {
             }
             return env.DB.prepare(`
                 INSERT OR REPLACE INTO materials 
-                (UID, unified_name, material_type, sub_category, alias, color, model_number, length_mm, width_mm, diameter_mm, r2_image_key)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (UID, unified_name, material_type, sub_category, alias, color, model_number, length_mm, width_mm, diameter_mm, r2_image_key, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).bind(
                 mat.UID, mat.unified_name, mat.material_type, mat.sub_category, mat.alias, 
                 mat.color, mat.model_number, 
                 parseFloat(mat.length_mm) || null, // 确保数字类型
                 parseFloat(mat.width_mm) || null,
                 parseFloat(mat.diameter_mm) || null, 
-                mat.r2_image_key || null
+                mat.r2_image_key || null,
+                mat.notes || null // 新增 notes 绑定
             );
         }).filter(stmt => stmt !== null);
         
