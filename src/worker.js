@@ -1,7 +1,7 @@
 // src/worker.js
 import * as jwt from '@tsndr/cloudflare-worker-jwt';
 
-// --- 完整的内嵌前端 HTML/JS (修正了语法错误) ---
+// --- 完整的内嵌前端 HTML/JS (新增了手动编辑和图片上传功能) ---
 const FRONTEND_HTML = `
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -17,19 +17,30 @@ const FRONTEND_HTML = `
             color: #333;
         }
         h1 { color: #007bff; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
-        #query-section, #auth-section, #import-section { 
+        #query-section, #auth-section, #import-section, #manual-section { 
             margin-bottom: 30px; 
             padding: 20px; 
             background-color: #fff;
             box-shadow: 0 4px 8px rgba(0,0,0,0.1);
             border-radius: 8px;
         }
-        input[type="text"], input[type="password"], input[type="file"] {
-            padding: 10px;
-            margin: 8px 0;
-            width: 250px;
+        input:not([type="file"]):not([type="checkbox"]):not([type="radio"]), select {
+            padding: 8px;
+            margin: 5px 0;
+            width: 100%;
+            box-sizing: border-box;
             border: 1px solid #ccc;
             border-radius: 4px;
+        }
+        .form-group {
+            margin-bottom: 10px;
+        }
+        .form-row {
+            display: flex;
+            gap: 20px;
+        }
+        .form-row > div {
+            flex: 1;
         }
         button {
             padding: 10px 15px;
@@ -41,15 +52,9 @@ const FRONTEND_HTML = `
             cursor: pointer;
             transition: background-color 0.3s ease;
         }
-        button.delete-btn {
-            background-color: #dc3545;
-        }
-        button.delete-btn:hover {
-            background-color: #c82333;
-        }
-        button:hover {
-            background-color: #218838;
-        }
+        button.delete-btn { background-color: #dc3545; }
+        button.edit-btn { background-color: #ffc107; color: #333; }
+        button:hover { background-color: #218838; }
         table { 
             width: 100%; 
             border-collapse: collapse; 
@@ -58,9 +63,10 @@ const FRONTEND_HTML = `
         }
         th, td { 
             border: 1px solid #e0e0e0; 
-            padding: 10px; 
+            padding: 8px; 
             text-align: left; 
             word-wrap: break-word;
+            font-size: 0.9em;
         }
         th { 
             background-color: #e9ecef; 
@@ -72,9 +78,10 @@ const FRONTEND_HTML = `
             object-fit: cover;
             border-radius: 4px;
         }
-        #login-status, #import-status {
-            margin-top: 10px;
-            font-weight: bold;
+        .upload-controls {
+            display: flex;
+            gap: 5px;
+            align-items: center;
         }
     </style>
 </head>
@@ -94,15 +101,73 @@ const FRONTEND_HTML = `
     <div id="main-section" style="display:none;">
         <button onclick="handleLogout()" style="float: right; background-color: #dc3545;">退出登录</button>
         
+        <div id="manual-section">
+            <h2>📝 手动创建 / 编辑记录 <button onclick="resetManualForm()" style="background-color: #17a2b8;">清空表单</button></h2>
+            <form id="material-form">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="f_UID">唯一识别码 (UID) *</label>
+                        <input type="text" id="f_UID" name="UID" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="f_unified_name">统一名称 *</label>
+                        <input type="text" id="f_unified_name" name="unified_name" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="f_material_type">材质</label>
+                        <input type="text" id="f_material_type" name="material_type">
+                    </div>
+                    <div class="form-group">
+                        <label for="f_sub_category">小类</label>
+                        <input type="text" id="f_sub_category" name="sub_category">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="f_alias">别名</label>
+                        <input type="text" id="f_alias" name="alias">
+                    </div>
+                    <div class="form-group">
+                        <label for="f_color">颜色</label>
+                        <input type="text" id="f_color" name="color">
+                    </div>
+                    <div class="form-group">
+                        <label for="f_model_number">型号</label>
+                        <input type="text" id="f_model_number" name="model_number">
+                    </div>
+                    <div class="form-group">
+                        <label for="f_length_mm">长度 (mm)</label>
+                        <input type="number" step="0.01" id="f_length_mm" name="length_mm">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="f_width_mm">宽度 (mm)</label>
+                        <input type="number" step="0.01" id="f_width_mm" name="width_mm">
+                    </div>
+                    <div class="form-group">
+                        <label for="f_diameter_mm">直径 (mm)</label>
+                        <input type="number" step="0.01" id="f_diameter_mm" name="diameter_mm">
+                    </div>
+                    <div class="form-group" style="flex: 2;">
+                        <label for="f_r2_image_key">R2 图片路径 (r2_image_key)</label>
+                        <div class="upload-controls">
+                            <input type="text" id="f_r2_image_key" name="r2_image_key" placeholder="例如: folder/image.jpg" style="width: 60%; margin: 0;">
+                            <input type="file" id="f_image_file" accept="image/*" style="width: 40%; margin: 0;">
+                            <button type="button" onclick="handleImageUpload()" style="flex-shrink: 0; padding: 5px 10px;">上传图片</button>
+                        </div>
+                    </div>
+                </div>
+                <button type="submit" id="save-btn" onclick="event.preventDefault(); handleSave()">保存/更新记录</button>
+                <p id="manual-status" style="color: blue;"></p>
+            </form>
+        </div>
+
         <div id="import-section">
             <h2>📤 批量导入 (支持 CSV / JSON)</h2>
             <input type="file" id="import-file" accept=".json, .csv">
-            <button onclick="handleImport()">解析并导入数据</button>
+            <button onclick="handleBulkImport()">解析并导入数据</button>
             <p id="import-status" style="color: blue;"></p>
-            <p style="font-size: 0.9em; color: #666;">
-                **CSV/JSON 字段要求：** 必须包含以下 11 个字段 (顺序不限，但推荐包含 UID 和 r2_image_key) <br>
-                <code>UID</code>, <code>unified_name</code>, <code>material_type</code>, <code>sub_category</code>, <code>alias</code>, <code>color</code>, <code>model_number</code>, <code>length_mm</code>, <code>width_mm</code>, <code>diameter_mm</code>, <code>r2_image_key</code>
-            </p>
         </div>
 
         <div id="query-section">
@@ -115,11 +180,10 @@ const FRONTEND_HTML = `
                     <tr>
                         <th style="width: 5%;">图片</th>
                         <th style="width: 15%;">唯一识别码 (UID)</th>
-                        <th style="width: 15%;">统一名称</th>
-                        <th style="width: 15%;">小类/材质</th>
-                        <th style="width: 15%;">型号/尺寸 (mm)</th>
-                        <th style="width: 25%;">R2 Key (图片路径)</th>
-                        <th style="width: 10%;">操作</th>
+                        <th style="width: 25%;">名称 / 型号 / 尺寸</th>
+                        <th style="width: 25%;">小类 / 材质 / 颜色</th>
+                        <th style="width: 10%;">图片 Key</th>
+                        <th style="width: 15%;">操作</th>
                     </tr>
                 </thead>
                 <tbody id="results-body">
@@ -140,41 +204,153 @@ const FRONTEND_HTML = `
             }
         };
 
-        // --- CSV/JSON 文件解析和导入功能 ---
+        // --- 核心 CRUD & Upload 逻辑 ---
 
-        /** 简单的 CSV 解析函数 */
+        function getAuthHeaders() {
+            return {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + localStorage.getItem('jwtToken')
+            };
+        }
+        
+        // --- 1. 手动编辑/新增 (Save) ---
+
+        function getFormData() {
+            const data = {};
+            FIELD_NAMES.forEach(name => {
+                const element = document.getElementById('f_' + name);
+                if (element) {
+                    // 对于数字类型，确保为空时不传递字符串 "null" 或空字符串
+                    if (name.endsWith('_mm')) {
+                        data[name] = element.value ? parseFloat(element.value) : null;
+                    } else {
+                        data[name] = element.value || null;
+                    }
+                }
+            });
+            return data;
+        }
+
+        async function handleSave() {
+            const token = localStorage.getItem('jwtToken');
+            const status = document.getElementById('manual-status');
+            const data = getFormData();
+
+            if (!token) { status.textContent = '请先登录。'; status.style.color = 'red'; return; }
+            if (!data.UID || !data.unified_name) {
+                status.textContent = 'UID 和 统一名称 不能为空。'; status.style.color = 'red'; return;
+            }
+
+            status.textContent = '正在保存/更新记录...';
+            status.style.color = 'blue';
+
+            try {
+                const response = await fetch(\`\${API_BASE_URL}/materials\`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify(data)
+                });
+
+                const result = await response.json();
+
+                if (response.ok && result.status === 'success') {
+                    status.textContent = \`记录 \${result.uid} 保存成功！\`;
+                    status.style.color = 'green';
+                    fetchMaterials(); // 刷新列表
+                } else {
+                    status.textContent = \`保存失败: \${result.message || response.statusText}\`;
+                    status.style.color = 'red';
+                }
+
+            } catch (error) {
+                status.textContent = '网络错误，保存失败: ' + error.message;
+                status.style.color = 'red';
+            }
+        }
+
+        // --- 2. 图片上传 ---
+
+        async function handleImageUpload() {
+            const fileInput = document.getElementById('f_image_file');
+            const keyInput = document.getElementById('f_r2_image_key');
+            const status = document.getElementById('manual-status');
+            const token = localStorage.getItem('jwtToken');
+            
+            if (!token) { status.textContent = '请先登录。'; status.style.color = 'red'; return; }
+            if (fileInput.files.length === 0) { status.textContent = '请选择图片文件。'; status.style.color = 'red'; return; }
+            const file = fileInput.files[0];
+            const r2Key = keyInput.value.trim() || \`uploads/\${Date.now()}/\${file.name}\`;
+            
+            status.textContent = '正在请求 R2 签名链接...';
+            status.style.color = 'blue';
+
+            try {
+                // 1. 获取预签名 URL
+                const signResponse = await fetch(\`\${API_BASE_URL}/presign-url\`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({ key: r2Key })
+                });
+                
+                if (!signResponse.ok) throw new Error(\`签名失败: \${signResponse.statusText}\`);
+
+                const { uploadUrl } = await signResponse.json();
+                
+                // 2. 直接上传到 R2
+                status.textContent = '正在上传文件到 R2...';
+                const uploadResponse = await fetch(uploadUrl, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': file.type || 'application/octet-stream',
+                        'Content-Length': file.size
+                    },
+                    body: file
+                });
+                
+                if (!uploadResponse.ok) throw new Error(\`上传失败: \${uploadResponse.statusText}\`);
+
+                // 3. 更新表单字段
+                keyInput.value = r2Key; 
+                status.textContent = \`图片上传成功！R2 Key: \${r2Key}\`;
+                status.style.color = 'green';
+                
+                // 提示用户保存记录
+                if (document.getElementById('f_UID').value) {
+                    status.textContent += ' 请点击 "保存/更新记录" 以更新数据库记录。';
+                }
+
+            } catch (error) {
+                status.textContent = '图片上传失败: ' + error.message;
+                status.style.color = 'red';
+            }
+        }
+
+        // --- 3. 批量导入 ---
+        
         function parseCSV(csvText) {
-            // 使用正则表达式处理 Windows/Unix 换行符
             const lines = csvText.trim().split(/\\r?\\n/); 
             if (lines.length === 0) return [];
             
-            // 使用第一个非空行作为 Headers
             const headerLine = lines[0].split(',');
             const headers = headerLine.map(h => h.trim().replace(/['"]+/g, ''));
             const data = [];
 
-            // 从第二行开始遍历数据
             for (let i = 1; i < lines.length; i++) {
                 if (!lines[i].trim()) continue;
 
                 const values = lines[i].split(','); 
                 let item = {};
 
-                // 尝试按头部名称匹配
                 headers.forEach((header, index) => {
                     if (index < values.length) {
-                        const key = header.toLowerCase().replace(/[^a-z0-9_]/g, ''); // 简化键名
-                        
-                        // 尝试将 CSV 头部与预定义字段匹配
+                        const key = header.toLowerCase().replace(/[^a-z0-9_]/g, ''); 
                         const matchedField = FIELD_NAMES.find(f => f.toLowerCase() === key || f.toLowerCase().includes(key));
-                        
                         if (matchedField) {
                              item[matchedField] = values[index].trim().replace(/['"]+/g, '');
                         }
                     }
                 });
 
-                // 如果按名称匹配失败或字段不全，则按顺序填充 (简化逻辑)
                 if (Object.keys(item).length < 3) {
                     item = {};
                     FIELD_NAMES.forEach((field, index) => {
@@ -184,7 +360,6 @@ const FRONTEND_HTML = `
                     });
                 }
                 
-                // 确保数字字段是数字
                 ['length_mm', 'width_mm', 'diameter_mm'].forEach(key => {
                     if (item[key]) item[key] = parseFloat(item[key]);
                 });
@@ -194,17 +369,13 @@ const FRONTEND_HTML = `
             return data;
         }
 
-        async function handleImport() {
+        async function handleBulkImport() {
             const fileInput = document.getElementById('import-file');
             const status = document.getElementById('import-status');
             const token = localStorage.getItem('jwtToken');
 
-            if (!token) {
-                status.textContent = '请先登录。'; status.style.color = 'red'; return;
-            }
-            if (fileInput.files.length === 0) {
-                status.textContent = '请选择一个 CSV 或 JSON 文件。'; status.style.color = 'red'; return;
-            }
+            if (!token) { status.textContent = '请先登录。'; status.style.color = 'red'; return; }
+            if (fileInput.files.length === 0) { status.textContent = '请选择一个 CSV 或 JSON 文件。'; status.style.color = 'red'; return; }
 
             const file = fileInput.files[0];
             const reader = new FileReader();
@@ -231,10 +402,7 @@ const FRONTEND_HTML = `
 
                     const response = await fetch(\`\${API_BASE_URL}/import\`, {
                         method: 'POST',
-                        headers: { 
-                            'Content-Type': 'application/json',
-                            'Authorization': \`Bearer \${token}\`
-                        },
+                        headers: getAuthHeaders(),
                         body: JSON.stringify(materialsArray)
                     });
 
@@ -243,9 +411,6 @@ const FRONTEND_HTML = `
                     if (response.ok && result.status === 'success') {
                         status.textContent = \`导入成功！总计处理 \${result.total_processed} 条，导入/更新 \${result.imported_count} 条。\`;
                         status.style.color = 'green';
-                        if (result.errors && result.errors.length > 0) {
-                             status.textContent += \` (\${result.errors.length} 条记录处理失败)\`;
-                        }
                         fetchMaterials();
                     } else {
                         status.textContent = \`导入失败: \${result.message || response.statusText}\`;
@@ -260,6 +425,59 @@ const FRONTEND_HTML = `
 
             reader.readAsText(file);
         }
+
+        // --- 4. 删除 ---
+        
+        async function handleDelete(uid) {
+            if (!confirm('确定要删除 UID 为 ' + uid + ' 的材料记录吗？\\n此操作不可逆！')) return;
+
+            const token = localStorage.getItem('jwtToken');
+            try {
+                const response = await fetch(\`\${API_BASE_URL}/materials/\${uid}\`, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+
+                if (response.ok) {
+                    alert(\`记录 \${uid} 删除成功！\`);
+                    fetchMaterials(); 
+                } else if (response.status === 404) {
+                    alert(\`删除失败：记录 \${uid} 未找到。\`);
+                } else {
+                    alert(\`删除失败: \${response.statusText}\`);
+                }
+            } catch (error) {
+                alert('网络错误，删除失败。');
+            }
+        }
+        
+        // --- 5. 表单/UI 辅助功能 ---
+        
+        function resetManualForm() {
+            document.getElementById('material-form').reset();
+            document.getElementById('manual-status').textContent = '表单已清空。';
+            document.getElementById('manual-status').style.color = 'blue';
+            document.getElementById('f_UID').disabled = false;
+        }
+
+        function handleEdit(material) {
+            // 清空状态
+            document.getElementById('manual-status').textContent = '正在编辑记录: ' + material.UID;
+            document.getElementById('manual-status').style.color = '#17a2b8';
+            document.getElementById('f_UID').disabled = true; // 编辑时 UID 不可修改
+            
+            // 填充表单
+            FIELD_NAMES.forEach(name => {
+                const element = document.getElementById('f_' + name);
+                if (element && material[name] !== undefined) {
+                    element.value = material[name];
+                }
+            });
+            // 清空图片文件选择
+            document.getElementById('f_image_file').value = '';
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
 
         // --- 登录/退出功能 ---
         async function handleLogin() {
@@ -303,59 +521,35 @@ const FRONTEND_HTML = `
             document.getElementById('login-status').style.color = 'green';
         }
 
-        // --- 查询和删除功能 ---
-        
-        async function handleDelete(uid) {
-            // 修复：使用标准字符串拼接，避免内部模板字符串解析错误
-            if (!confirm('确定要删除 UID 为 ' + uid + ' 的材料记录吗？\\n此操作不可逆！')) return;
-
-            const token = localStorage.getItem('jwtToken');
-            try {
-                const response = await fetch(\`\${API_BASE_URL}/materials/\${uid}\`, {
-                    method: 'DELETE',
-                    headers: { 'Authorization': \`Bearer \${token}\` }
-                });
-
-                if (response.ok) {
-                    alert(\`记录 \${uid} 删除成功！\`);
-                    fetchMaterials(); // 刷新列表
-                } else if (response.status === 404) {
-                    alert(\`删除失败：记录 \${uid} 未找到。\`);
-                } else {
-                    alert(\`删除失败: \${response.statusText}\`);
-                }
-            } catch (error) {
-                alert('网络错误，删除失败。');
-            }
-        }
+        // --- 查询和渲染 ---
 
         async function fetchMaterials() {
             const query = document.getElementById('search-query').value;
             const token = localStorage.getItem('jwtToken');
             const body = document.getElementById('results-body');
-            body.innerHTML = '<tr><td colspan="7" style="text-align: center;">正在查询...</td></tr>';
+            body.innerHTML = '<tr><td colspan="6" style="text-align: center;">正在查询...</td></tr>';
             
             if (!token) {
-                body.innerHTML = '<tr><td colspan="7" style="color: red; text-align: center;">请先登录。</td></tr>';
+                body.innerHTML = '<tr><td colspan="6" style="color: red; text-align: center;">请先登录。</td></tr>';
                 return;
             }
 
             try {
                 const response = await fetch(\`\${API_BASE_URL}/materials?q=\${encodeURIComponent(query)}\`, {
-                    headers: { 'Authorization': \`Bearer \${token}\` }
+                    headers: { 'Authorization': 'Bearer ' + token }
                 });
 
                 if (response.ok) {
                     const materials = await response.json();
                     renderMaterials(materials);
                 } else if (response.status === 403 || response.status === 401) {
-                    body.innerHTML = '<tr><td colspan="7" style="color: red; text-align: center;">权限过期，请重新登录。</td></tr>';
+                    body.innerHTML = '<tr><td colspan="6" style="color: red; text-align: center;">权限过期，请重新登录。</td></tr>';
                     handleLogout();
                 } else {
-                    body.innerHTML = '<tr><td colspan="7" style="color: red; text-align: center;">查询失败: ' + response.statusText + '</td></tr>';
+                    body.innerHTML = '<tr><td colspan="6" style="color: red; text-align: center;">查询失败: ' + response.statusText + '</td></tr>';
                 }
             } catch (error) {
-                body.innerHTML = '<tr><td colspan="7" style="color: red; text-align: center;">网络错误: ' + error.message + '</td></tr>';
+                body.innerHTML = '<tr><td colspan="6" style="color: red; text-align: center;">网络错误: ' + error.message + '</td></tr>';
             }
         }
 
@@ -364,19 +558,22 @@ const FRONTEND_HTML = `
             body.innerHTML = ''; 
 
             if (materials.length === 0) {
-                body.innerHTML = '<tr><td colspan="7" style="text-align: center;">未找到匹配的材料。</td></tr>';
+                body.innerHTML = '<tr><td colspan="6" style="text-align: center;">未找到匹配的材料。</td></tr>';
                 return;
             }
 
             materials.forEach(mat => {
                 const row = body.insertRow();
                 
-                let dimensions = '-';
+                let dimensions = '';
                 if (mat.diameter_mm) {
                     dimensions = \`Ø\${mat.diameter_mm}\`;
                 } else if (mat.length_mm && mat.width_mm) {
                     dimensions = \`\${mat.length_mm} x \${mat.width_mm}\`;
                 }
+
+                // 移除不必要的字段，只保留需要传给 handleEdit 的数据
+                const cleanMat = JSON.stringify(mat).replace(/'/g, "\\\\'"); // 确保字符串可以作为JS参数传递
                 
                 // 图片单元格
                 const imgCell = row.insertCell();
@@ -386,24 +583,27 @@ const FRONTEND_HTML = `
                     imgCell.textContent = '-';
                 }
                 
-                // 仅显示关键信息，将图片Key和操作按钮放在一起
+                // 数据展示
                 row.insertCell().textContent = mat.UID;
-                row.insertCell().textContent = mat.unified_name;
-                row.insertCell().innerHTML = \`材质: \${mat.material_type || '-'} <br> 小类: \${mat.sub_category || '-'}\`;
-                row.insertCell().innerHTML = \`型号: \${mat.model_number || '-'} <br> 尺寸: \${dimensions}\`;
-
-                // R2 Key / 图片上传占位
-                const r2KeyCell = row.insertCell();
-                r2KeyCell.innerHTML = \`
-                    <input type="text" value="\${mat.r2_image_key || ''}" style="width: 100%; font-size: 0.8em;" readonly>
-                    <small>
-                    * 实际上传功能需集成R2签名，此为路径占位。
-                    </small>
+                row.insertCell().innerHTML = \`
+                    <span style="font-weight: bold;">\${mat.unified_name}</span> <br>
+                    型号: \${mat.model_number || '-'} <br> 
+                    尺寸: \${dimensions || '-'}
                 \`;
+                row.insertCell().innerHTML = \`
+                    小类: \${mat.sub_category || '-'} <br>
+                    材质: \${mat.material_type || '-'} <br>
+                    颜色: \${mat.color || '-'}
+                \`;
+
+                row.insertCell().textContent = mat.r2_image_key || '-';
 
                 // 操作按钮
                 const actionsCell = row.insertCell();
-                actionsCell.innerHTML = \`<button class="delete-btn" onclick="handleDelete('\${mat.UID}')">删除</button>\`;
+                actionsCell.innerHTML = \`
+                    <button class="edit-btn" onclick='handleEdit(\${cleanMat})'>编辑</button>
+                    <button class="delete-btn" onclick="handleDelete('\${mat.UID}')">删除</button>
+                \`;
                 actionsCell.style.textAlign = 'center';
             });
         }
@@ -412,7 +612,7 @@ const FRONTEND_HTML = `
 </html>
 `; 
 
-// --- Worker 后端逻辑 (不变) ---
+// --- Worker 后端逻辑 ---
 
 // ⚠️ 密码比较占位：用于生产环境，与 schema.sql 保持一致
 async function comparePassword(password, storedHash, env) {
@@ -493,6 +693,69 @@ async function handleLogin(request, env) {
     }
 }
 
+// 新增 API：生成 R2 预签名 URL
+async function handleGeneratePresignedUrl(request, env) {
+    if (!env.R2_BUCKET) {
+        return new Response(JSON.stringify({ message: 'R2_BUCKET binding is missing.' }), { status: 500 });
+    }
+    const { key } = await request.json();
+    if (!key) {
+        return new Response(JSON.stringify({ message: 'Missing R2 key.' }), { status: 400 });
+    }
+    
+    try {
+        // 生成一个用于 PUT 操作的预签名 URL，有效期 5 分钟
+        const signedUrl = await env.R2_BUCKET.createPresignedUrl({
+            key: key,
+            method: 'PUT',
+            expiration: 60 * 5
+        });
+
+        return new Response(JSON.stringify({ uploadUrl: signedUrl.url, r2Key: key }), {
+            headers: { 'Content-Type': 'application/json' }
+        });
+    } catch (e) {
+        console.error("Presign error:", e);
+        return new Response(JSON.stringify({ message: `Failed to generate presigned URL: ${e.message}` }), { status: 500 });
+    }
+}
+
+// 新增 API：处理单条记录创建/更新 (Manual Save)
+async function handleCreateUpdateMaterial(request, env) {
+    if (!env.DB) {
+        return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
+    }
+
+    const mat = await request.json();
+
+    if (!mat.UID || !mat.unified_name) {
+        return new Response(JSON.stringify({ message: 'Missing required fields: UID and unified_name' }), { status: 400 });
+    }
+
+    try {
+        const stmt = env.DB.prepare(`
+            INSERT OR REPLACE INTO materials 
+            (UID, unified_name, material_type, sub_category, alias, color, model_number, length_mm, width_mm, diameter_mm, r2_image_key)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+            mat.UID, mat.unified_name, mat.material_type, mat.sub_category, mat.alias, 
+            mat.color, mat.model_number, 
+            mat.length_mm, mat.width_mm, mat.diameter_mm, 
+            mat.r2_image_key || null
+        );
+
+        await stmt.run();
+
+        return new Response(JSON.stringify({ status: 'success', message: 'Material saved/updated.', uid: mat.UID }), {
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+    } catch (e) {
+        console.error("Save/Update error:", e);
+        return new Response(JSON.stringify({ message: `Save/Update Failed: ${e.message}` }), { status: 500 });
+    }
+}
+
 
 async function handleQueryMaterials(request, env) {
     try {
@@ -526,7 +789,7 @@ async function handleQueryMaterials(request, env) {
 
     } catch (e) {
         console.error("Query error:", e);
-        return new Response('Database Query Failed', { status: 500 });
+        return new Response(JSON.stringify({ message: 'Database Query Failed' }), { status: 500 });
     }
 }
 
@@ -562,7 +825,7 @@ async function handleImportMaterials(request, env) {
                 parseFloat(mat.length_mm) || null, // 确保数字类型
                 parseFloat(mat.width_mm) || null,
                 parseFloat(mat.diameter_mm) || null, 
-                mat.r2_image_key
+                mat.r2_image_key || null
             );
         }).filter(stmt => stmt !== null);
         
@@ -589,10 +852,8 @@ async function handleImportMaterials(request, env) {
     }
 }
 
-// 新增：删除材料 API
 async function handleDeleteMaterial(request, env) {
     const url = new URL(request.url);
-    // 路径应该像 /api/materials/UID-12345
     const parts = url.pathname.split('/');
     const uid = parts[parts.length - 1]; 
 
@@ -601,7 +862,6 @@ async function handleDeleteMaterial(request, env) {
     }
 
     try {
-        
         const result = await env.DB.prepare("DELETE FROM materials WHERE UID = ?").bind(uid).run();
         
         if (result.changes === 0) {
@@ -629,11 +889,10 @@ export default {
         const path = url.pathname;
         const method = request.method;
 
-        // 设置 CORS headers
         const headers = { 
             'Content-Type': 'application/json',
             'Access-Control-Allow-Origin': '*', 
-            'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS', // 增加 DELETE
+            'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
             'Access-Control-Allow-Headers': 'Content-Type, Authorization',
         };
 
@@ -641,17 +900,14 @@ export default {
             return new Response(null, { headers });
         }
 
-        // 1. 静态文件路由 (提供前端 HTML)
         if (path === '/' && method === 'GET') {
              return new Response(FRONTEND_HTML, { headers: { 'Content-Type': 'text/html' } });
         }
 
-        // 2. 公开路由 (登录)
         if (path === '/api/login' && method === 'POST') {
             return handleLogin(request, env);
         }
         
-        // 3. 保护路由 (所有其他 API)
         if (path.startsWith('/api/')) {
             const authResult = await authenticate(request, env);
             if (!authResult.authorized) {
@@ -663,9 +919,22 @@ export default {
                 return handleDeleteMaterial(request, env);
             }
 
+            // POST /api/materials (Manual Create/Update)
+            if (path === '/api/materials' && method === 'POST') {
+                 return handleCreateUpdateMaterial(request, env);
+            }
+            
+            // GET /api/materials (Query)
             if (path === '/api/materials' && method === 'GET') {
                 return handleQueryMaterials(request, env);
             }
+            
+            // POST /api/presign-url (R2 Upload)
+            if (path === '/api/presign-url' && method === 'POST') {
+                return handleGeneratePresignedUrl(request, env);
+            }
+
+            // POST /api/import (Bulk Import)
             if (path === '/api/import' && method === 'POST') {
                 return handleImportMaterials(request, env);
             }
