@@ -1,7 +1,7 @@
-// src/worker.js - 顶部
+// src/worker.js
 import * as jwt from '@tsndr/cloudflare-worker-jwt';
 
-// --- 完整的内嵌前端 HTML/JS ---
+// --- 完整的内嵌前端 HTML/JS (已添加导入功能) ---
 const FRONTEND_HTML = `
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -17,17 +17,17 @@ const FRONTEND_HTML = `
             color: #333;
         }
         h1 { color: #007bff; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
-        #query-section, #auth-section { 
+        #query-section, #auth-section, #import-section { 
             margin-bottom: 30px; 
             padding: 20px; 
             background-color: #fff;
             box-shadow: 0 4px 8px rgba(0,0,0,0.1);
             border-radius: 8px;
         }
-        input[type="text"], input[type="password"] {
+        input[type="text"], input[type="password"], input[type="file"] {
             padding: 10px;
             margin: 8px 0;
-            width: 200px;
+            width: 250px;
             border: 1px solid #ccc;
             border-radius: 4px;
         }
@@ -64,7 +64,7 @@ const FRONTEND_HTML = `
             object-fit: cover;
             border-radius: 4px;
         }
-        #login-status {
+        #login-status, #import-status {
             margin-top: 10px;
             font-weight: bold;
         }
@@ -75,35 +75,50 @@ const FRONTEND_HTML = `
 
     <div id="auth-section">
         <h2>🔑 用户登录</h2>
-        <input type="text" id="username" value="admin" placeholder="用户名">
-        <input type="password" id="password" value="adminpass" placeholder="密码">
+        <input type="text" id="username" value="test" placeholder="用户名">
+        <input type="password" id="password" value="testpass" placeholder="密码">
         <button onclick="handleLogin()">登录</button>
         <p id="login-status" style="color: red;"></p>
     </div>
     
     <hr>
     
-    <div id="query-section" style="display:none;">
-        <h2>🔍 材料查询</h2>
-        <input type="text" id="search-query" placeholder="输入名称、别名或小类进行查询" style="width: 400px;">
-        <button onclick="fetchMaterials()">查询</button>
-        <button onclick="handleLogout()" style="float: right; background-color: #dc3545;">退出登录</button>
+    <div id="main-section" style="display:none;">
         
-        <table id="results-table">
-            <thead>
-                <tr>
-                    <th>图片</th>
-                    <th>唯一识别码 (UID)</th>
-                    <th>统一名称</th>
-                    <th>小类</th>
-                    <th>材质</th>
-                    <th>型号</th>
-                    <th>尺寸 (mm)</th>
-                </tr>
-            </thead>
-            <tbody id="results-body">
-                </tbody>
-        </table>
+        <div id="import-section">
+            <h2>📤 批量导入 (JSON 格式)</h2>
+            <input type="file" id="import-file" accept=".json">
+            <button onclick="handleImport()">导入数据</button>
+            <p id="import-status" style="color: blue;"></p>
+            <p style="font-size: 0.9em; color: #666;">
+                请上传包含材料 JSON 数组的文件。
+                <br>
+                **注意：** 导入后请重新查询以查看最新数据。
+            </p>
+        </div>
+
+        <div id="query-section">
+            <h2>🔍 材料查询</h2>
+            <input type="text" id="search-query" placeholder="输入名称、别名或小类进行查询" style="width: 400px;">
+            <button onclick="fetchMaterials()">查询</button>
+            <button onclick="handleLogout()" style="float: right; background-color: #dc3545;">退出登录</button>
+            
+            <table id="results-table">
+                <thead>
+                    <tr>
+                        <th>图片</th>
+                        <th>唯一识别码 (UID)</th>
+                        <th>统一名称</th>
+                        <th>小类</th>
+                        <th>材质</th>
+                        <th>型号</th>
+                        <th>尺寸 (mm)</th>
+                    </tr>
+                </thead>
+                <tbody id="results-body">
+                    </tbody>
+            </table>
+        </div>
     </div>
 
     <script>
@@ -112,11 +127,79 @@ const FRONTEND_HTML = `
         window.onload = function() {
             if (localStorage.getItem('jwtToken')) {
                 document.getElementById('auth-section').style.display = 'none';
-                document.getElementById('query-section').style.display = 'block';
+                document.getElementById('main-section').style.display = 'block';
                 fetchMaterials(); 
             }
         };
 
+        // --- 导入功能 ---
+        async function handleImport() {
+            const fileInput = document.getElementById('import-file');
+            const status = document.getElementById('import-status');
+            const token = localStorage.getItem('jwtToken');
+
+            if (!token) {
+                status.textContent = '请先登录。';
+                status.style.color = 'red';
+                return;
+            }
+            if (fileInput.files.length === 0) {
+                status.textContent = '请选择一个 JSON 文件。';
+                status.style.color = 'red';
+                return;
+            }
+
+            const file = fileInput.files[0];
+            const reader = new FileReader();
+
+            reader.onload = async function (e) {
+                try {
+                    const content = e.target.result;
+                    const materialsArray = JSON.parse(content);
+
+                    if (!Array.isArray(materialsArray)) {
+                        status.textContent = '文件格式错误：请确保文件内容是一个 JSON 数组 ([...])。';
+                        status.style.color = 'red';
+                        return;
+                    }
+
+                    status.textContent = \`正在导入 \${materialsArray.length} 条数据...\`;
+                    status.style.color = 'blue';
+
+                    const response = await fetch(\`\${API_BASE_URL}/import\`, {
+                        method: 'POST',
+                        headers: { 
+                            'Content-Type': 'application/json',
+                            'Authorization': \`Bearer \${token}\`
+                        },
+                        body: JSON.stringify(materialsArray)
+                    });
+
+                    const result = await response.json();
+
+                    if (response.ok && result.status === 'success') {
+                        status.textContent = \`导入成功！总计处理 \${result.total_processed} 条，导入/更新 \${result.imported_count} 条。\`;
+                        status.style.color = 'green';
+                        if (result.errors.length > 0) {
+                             status.textContent += \` (\${result.errors.length} 条记录因缺少 UID 被跳过)\`;
+                        }
+                        // 导入成功后自动查询最新数据
+                        fetchMaterials();
+                    } else {
+                        status.textContent = \`导入失败: \${result.errors ? result.errors.join('; ') : response.statusText}\`;
+                        status.style.color = 'red';
+                    }
+
+                } catch (error) {
+                    status.textContent = '文件解析或上传错误: ' + error.message;
+                    status.style.color = 'red';
+                }
+            };
+
+            reader.readAsText(file);
+        }
+
+        // --- 登录/退出功能 ---
         async function handleLogin() {
             const username = document.getElementById('username').value;
             const password = document.getElementById('password').value;
@@ -138,7 +221,7 @@ const FRONTEND_HTML = `
                     status.style.color = 'green';
                     
                     document.getElementById('auth-section').style.display = 'none';
-                    document.getElementById('query-section').style.display = 'block';
+                    document.getElementById('main-section').style.display = 'block';
                     fetchMaterials();
                 } else {
                     status.textContent = '登录失败: ' + (await response.text() || response.statusText);
@@ -152,12 +235,13 @@ const FRONTEND_HTML = `
         
         function handleLogout() {
             localStorage.removeItem('jwtToken');
-            document.getElementById('query-section').style.display = 'none';
+            document.getElementById('main-section').style.display = 'none';
             document.getElementById('auth-section').style.display = 'block';
             document.getElementById('login-status').textContent = '已退出登录。';
             document.getElementById('login-status').style.color = 'green';
         }
 
+        // --- 查询功能 (不变) ---
         async function fetchMaterials() {
             const query = document.getElementById('search-query').value;
             const token = localStorage.getItem('jwtToken');
@@ -227,22 +311,10 @@ const FRONTEND_HTML = `
 </html>
 `; 
 
-// ... (以下是 Worker 的后端逻辑，与上一步相同)
+// --- Worker 后端逻辑 (不变) ---
 
-// ⚠️ 密码哈希占位：请替换为 Scrypt 或 Argon2 的实现
-async function hashPassword(password, env) {
-    // 实际生产中应使用 Scrypt/Argon2
-    const encoder = new TextEncoder();
-    // ⚠️ 生产环境应使用 Salt，这里为了简化演示暂时省略
-    const data = encoder.encode(password); 
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-    return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-// ⚠️ 密码比较占位：请替换为 Scrypt 或 Argon2 的比较逻辑
+// ⚠️ 密码比较占位：用于生产环境，与 schema.sql 保持一致
 async function comparePassword(password, storedHash, env) {
-    // 实际生产中应使用 Scrypt/Argon2
-    // 临时使用明文比较，生产环境必须更换！
     return password === storedHash;
 }
 
@@ -278,6 +350,10 @@ async function authenticate(request, env) {
 // --- API 路由处理函数 ---
 
 async function handleLogin(request, env) {
+    if (!env.DB) {
+        return new Response('Configuration Error: DB binding is missing.', { status: 500 });
+    }
+    
     try {
         const { username, password } = await request.json();
         
@@ -286,29 +362,33 @@ async function handleLogin(request, env) {
         ).bind(username).all();
 
         if (users.length === 0) {
-            return new Response('Invalid credentials', { status: 401 });
+            return new Response('Invalid credentials (User not found)', { status: 401 });
         }
         
         const user = users[0];
         
-        // ⚠️ 生产环境需替换为真正的比较函数
         if (!await comparePassword(password, user.password_hash, env)) {
-             return new Response('Invalid credentials', { status: 401 });
+             return new Response('Invalid credentials (Password mismatch)', { status: 401 });
         }
 
-        const payload = { 
-            user_id: user.id, 
-            exp: Math.floor(Date.now() / 1000) + (60 * 60 * 24) // 24小时有效期
-        };
-        const token = await jwt.sign(payload, env.JWT_SECRET);
+        try {
+            const payload = { 
+                user_id: user.id, 
+                exp: Math.floor(Date.now() / 1000) + (60 * 60 * 24)
+            };
+            const token = await jwt.sign(payload, env.JWT_SECRET);
 
-        return new Response(JSON.stringify({ token, user_id: user.id }), { 
-            headers: { 'Content-Type': 'application/json' } 
-        });
+            return new Response(JSON.stringify({ token, user_id: user.id }), { 
+                headers: { 'Content-Type': 'application/json' } 
+            });
+
+        } catch (jwtError) {
+            return new Response('JWT Signing Error. Check JWT_SECRET in wrangler.toml.', { status: 500 });
+        }
 
     } catch (e) {
-        console.error("Login error:", e);
-        return new Response('Internal Server Error', { status: 500 });
+        console.error("Login error:", e.message);
+        return new Response(`Internal Server Error: ${e.message}`, { status: 500 });
     }
 }
 
@@ -356,7 +436,11 @@ async function handleImportMaterials(request, env) {
     const materials = await request.json(); 
     
     if (!Array.isArray(materials) || materials.length === 0) {
-        return new Response('Invalid data format. Expected array of materials.', { status: 400 });
+        return new Response(JSON.stringify({ 
+            status: 'error', 
+            message: 'Invalid data format. Expected array of materials.',
+            errors: ['Invalid data format. Expected array of materials.']
+        }), { status: 400, headers: { 'Content-Type': 'application/json' } });
     }
 
     try {
@@ -392,7 +476,11 @@ async function handleImportMaterials(request, env) {
 
     } catch (e) {
         console.error("Import error:", e);
-        return new Response(`Import Failed: ${e.message}`, { status: 500 });
+        return new Response(JSON.stringify({ 
+            status: 'error', 
+            message: 'Import Failed',
+            errors: [e.message]
+        }), { status: 500, headers: { 'Content-Type': 'application/json' } });
     }
 }
 
@@ -419,7 +507,6 @@ export default {
 
         // 1. 静态文件路由 (提供前端 HTML)
         if (path === '/' && method === 'GET') {
-             // 修正：返回完整的内嵌 HTML
              return new Response(FRONTEND_HTML, { headers: { 'Content-Type': 'text/html' } });
         }
 
