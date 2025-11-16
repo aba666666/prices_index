@@ -21,6 +21,6 @@ database_id = "93c3be38-723f-4ab7-a735-684eed79ff21"
 binding = "R2_MEDIA"  # 🚨 关键修改：R2 绑定名称
 bucket_name = "zzzqq"
 
-[site]
-bucket = "src/static/" 
+#[site]
+#bucket = "src/static/" 
 #entry-point = "src/worker.js" # 告诉 Worker 脚本入口
