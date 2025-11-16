@@ -23,4 +23,4 @@ bucket_name = "zzzqq"
 
 [site]
 bucket = "src/static" 
-entry-point = "src/worker.js" # 告诉 Worker 脚本入口
+#entry-point = "src/worker.js" # 告诉 Worker 脚本入口
