@@ -231,7 +231,7 @@ const FRONTEND_HTML = `
 
     <script>
         const API_BASE_URL = '/api'; 
-        // 保持 FIELD_NAMES 顺序，UID 优先，notes 在 alias 之前（这是CSV回退逻辑的顺序，与前端显示顺序不同，但保证数据结构稳定）
+        // 增加 notes 字段，保持 UID 优先的逻辑顺序，notes 放在 alias 之前。
         const FIELD_NAMES = ["UID", "unified_name", "material_type", "sub_category", "model_number", "length_mm", "width_mm", "diameter_mm", "color", "alias", "notes", "r2_image_key"];
         let isReadOnly = false;
 
@@ -410,7 +410,7 @@ const FRONTEND_HTML = `
                 headers.forEach((header, index) => {
                     if (index < values.length) {
                         const key = header.toLowerCase().replace(/[^a-z0-9_]/g, ''); 
-                        // 新增 notes 匹配
+                        // 匹配字段，允许notes
                         const matchedField = FIELD_NAMES.find(f => f.toLowerCase() === key || f.toLowerCase().includes(key));
                         if (matchedField) {
                              item[matchedField] = values[index].trim().replace(/['"]+/g, '');
@@ -419,7 +419,6 @@ const FRONTEND_HTML = `
                 });
 
                 // 兼容旧格式或简单CSV
-                // 由于 FIELD_NAMES 中 UID 处于第一位，所以此回退逻辑保证了 UID 优先
                 if (Object.keys(item).length < 3) { 
                     item = {};
                     FIELD_NAMES.forEach((field, index) => {
@@ -887,7 +886,7 @@ async function handleDirectUpload(request, env) {
 }
 
 async function handleCreateUpdateMaterial(request, env) {
-    // *** 后端逻辑保持不变，notes 在 SQL 语句中已正确包含 ***
+    // *** 后端 D1 SQL 语句增加 notes 字段 ***
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
@@ -908,7 +907,7 @@ async function handleCreateUpdateMaterial(request, env) {
             mat.color, mat.model_number, 
             mat.length_mm, mat.width_mm, mat.diameter_mm, 
             mat.r2_image_key || null,
-            mat.notes || null 
+            mat.notes || null // 新增 notes 字段绑定
         );
 
         await stmt.run();
@@ -925,7 +924,7 @@ async function handleCreateUpdateMaterial(request, env) {
 
 
 async function handleQueryMaterials(request, env) {
-    // *** 后端逻辑保持不变，notes 在 SELECT 语句中已正确包含 ***
+    // *** 后端 D1 SQL 语句增加 notes 字段 ***
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
@@ -942,7 +941,7 @@ async function handleQueryMaterials(request, env) {
                 WHERE UID LIKE ? OR unified_name LIKE ? 
                    OR alias LIKE ? OR sub_category LIKE ? OR model_number LIKE ? OR notes LIKE ?
                 LIMIT 100
-            `).bind(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern); 
+            `).bind(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern); // 新增 notes 搜索
         } else {
             stmt = env.DB.prepare("SELECT * FROM materials LIMIT 100");
         }
@@ -966,7 +965,7 @@ async function handleQueryMaterials(request, env) {
 
 
 async function handleImportMaterials(request, env) {
-    // *** 后端逻辑保持不变，notes 在 BATCH 导入语句中已正确包含 ***
+    // *** 后端 D1 SQL 语句增加 notes 字段 ***
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
@@ -1001,7 +1000,7 @@ async function handleImportMaterials(request, env) {
                 parseFloat(mat.width_mm) || null,
                 parseFloat(mat.diameter_mm) || null, 
                 mat.r2_image_key || null,
-                mat.notes || null 
+                mat.notes || null // 新增 notes 字段绑定
             );
         }).filter(stmt => stmt !== null);
         
