@@ -22,5 +22,5 @@ binding = "R2_MEDIA"  # 🚨 关键修改：R2 绑定名称
 bucket_name = "zzzqq"
 
 [site]
-bucket = "src/static/index.html" 
+bucket = "src/static/" 
 #entry-point = "src/worker.js" # 告诉 Worker 脚本入口
