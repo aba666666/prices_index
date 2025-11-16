@@ -188,4 +188,10 @@ export default {
                 return handleImportMaterials(request, env);
             }
             
-            // 如果
+            // 如果所有 /api/ 路径都没有匹配，则返回 404
+            return new Response('API Endpoint Not Found', { status: 404, headers });
+        }
+
+        return new Response('Not Found', { status: 404, headers });
+    }
+};
