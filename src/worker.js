@@ -1,7 +1,7 @@
 // src/worker.js
 import * as jwt from '@tsndr/cloudflare-worker-jwt';
 
-// --- 完整的内嵌前端 HTML/JS (已添加 CSV 导入和删除功能) ---
+// --- 完整的内嵌前端 HTML/JS (修正了语法错误) ---
 const FRONTEND_HTML = `
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -79,7 +79,7 @@ const FRONTEND_HTML = `
     </style>
 </head>
 <body>
-    <h1>📚 小学教育材料统一数据库</h1>
+    <h1>📚 小学教育材料统一数据库 - 管理端</h1>
 
     <div id="auth-section">
         <h2>🔑 用户登录</h2>
@@ -144,7 +144,8 @@ const FRONTEND_HTML = `
 
         /** 简单的 CSV 解析函数 */
         function parseCSV(csvText) {
-            const lines = csvText.trim().split('\\n');
+            // 使用正则表达式处理 Windows/Unix 换行符
+            const lines = csvText.trim().split(/\\r?\\n/); 
             if (lines.length === 0) return [];
             
             // 使用第一个非空行作为 Headers
@@ -156,7 +157,6 @@ const FRONTEND_HTML = `
             for (let i = 1; i < lines.length; i++) {
                 if (!lines[i].trim()) continue;
 
-                // 简单的逗号分割，可能不适用于带逗号的字段
                 const values = lines[i].split(','); 
                 let item = {};
 
@@ -263,7 +263,6 @@ const FRONTEND_HTML = `
 
         // --- 登录/退出功能 ---
         async function handleLogin() {
-            // ... (与之前相同) ...
             const username = document.getElementById('username').value;
             const password = document.getElementById('password').value;
             const status = document.getElementById('login-status');
@@ -307,7 +306,8 @@ const FRONTEND_HTML = `
         // --- 查询和删除功能 ---
         
         async function handleDelete(uid) {
-            if (!confirm(\`确定要删除 UID 为 \${uid} 的材料记录吗？\n此操作不可逆！\u200C\)) return;
+            // 修复：使用标准字符串拼接，避免内部模板字符串解析错误
+            if (!confirm('确定要删除 UID 为 ' + uid + ' 的材料记录吗？\\n此操作不可逆！')) return;
 
             const token = localStorage.getItem('jwtToken');
             try {
@@ -330,7 +330,6 @@ const FRONTEND_HTML = `
         }
 
         async function fetchMaterials() {
-            // ... (与之前相同) ...
             const query = document.getElementById('search-query').value;
             const token = localStorage.getItem('jwtToken');
             const body = document.getElementById('results-body');
@@ -413,7 +412,7 @@ const FRONTEND_HTML = `
 </html>
 `; 
 
-// --- Worker 后端逻辑 ---
+// --- Worker 后端逻辑 (不变) ---
 
 // ⚠️ 密码比较占位：用于生产环境，与 schema.sql 保持一致
 async function comparePassword(password, storedHash, env) {
@@ -602,7 +601,6 @@ async function handleDeleteMaterial(request, env) {
     }
 
     try {
-        // R2 删除逻辑 (可选, 略过以简化)
         
         const result = await env.DB.prepare("DELETE FROM materials WHERE UID = ?").bind(uid).run();
         
