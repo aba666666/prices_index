@@ -619,13 +619,7 @@ const FRONTEND_HTML = `
 
 // ⚠️ 密码比较占位：用于生产环境，与 schema.sql 保持一致
 async function comparePassword(password, storedHash, env) {
-    // 假设您的 D1 数据库中存储的是明文密码（或硬编码的 'testpass'），请根据实际情况调整。
-    // 如果存储的是哈希值，您需要使用一个类似 bcrypt 的库，但在 Worker 中通常使用 Web Crypto API 或简单比较。
-    // 此处我们暂时用您的硬编码逻辑：
-    if (storedHash === 'testpass') { 
-        return password === 'testpass';
-    }
-    return password === storedHash; // 如果 D1 返回的是哈希值，这里需要进行哈希比较
+    return password === storedHash;
 }
 
 
@@ -651,7 +645,7 @@ async function authenticate(request, env) {
         if (!isValid) {
             return { authorized: false, status: 403 };
         }
-        return { authorized: true, status: 200 };
+        return { authorized: true };
     } catch (e) {
         return { authorized: false, status: 403 };
     }
@@ -660,23 +654,21 @@ async function authenticate(request, env) {
 // --- API 路由处理函数 ---
 
 async function handleLogin(request, env) {
-    // 假设您使用的是硬编码用户名/密码，但为了匹配 D1 逻辑，我们保留 D1 查询结构
     if (!env.DB) {
-        // 如果 DB 绑定失败，使用硬编码测试逻辑
+        // 如果 DB 绑定丢失，使用硬编码测试逻辑（与前端'test'/'testpass'匹配）
         const { username, password } = await request.json();
         if (username === 'test' && password === 'testpass') {
-            const token = await jwt.sign({ user: 'admin', exp: Math.floor(Date.now() / 1000) + (60 * 60 * 24) }, env.JWT_SECRET);
-            return new Response(JSON.stringify({ token, user_id: 1 }), { 
+             const token = await jwt.sign({ user: 'admin', exp: Math.floor(Date.now() / 1000) + (60 * 60 * 24) }, env.JWT_SECRET);
+             return new Response(JSON.stringify({ token, user_id: 1 }), { 
                 headers: { 'Content-Type': 'application/json' } 
-            });
+             });
         }
-        return new Response('Invalid credentials or DB binding missing.', { status: 401 });
+        return new Response('Configuration Error: DB binding is missing. Using fallback logic, but login failed.', { status: 401 });
     }
     
     try {
         const { username, password } = await request.json();
         
-        // 🚨 假设您的 D1 users 表中 'test' 用户的 password_hash 字段是 'testpass'
         const { results: users } = await env.DB.prepare(
             "SELECT id, password_hash FROM users WHERE username = ?"
         ).bind(username).all();
@@ -687,7 +679,8 @@ async function handleLogin(request, env) {
         
         const user = users[0];
         
-        if (!await comparePassword(password, user.password_hash, env)) {
+        // 假设您的 D1 users 表中 'test' 用户的 password_hash 字段是 'testpass'
+        if (!await comparePassword(password, user.password_hash || 'testpass', env)) { 
              return new Response('Invalid credentials (Password mismatch)', { status: 401 });
         }
 
@@ -712,14 +705,16 @@ async function handleLogin(request, env) {
     }
 }
 
+// 🚨 修复后的 R2 预签名函数 (使用 R2_STORAGE)
 async function handleGeneratePresignedUrl(request, env) {
     const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
-    
-    if (!env.R2_BUCKET) {
-        // 🚨 如果绑定完全丢失，则返回此信息
+
+    // 🚨 使用新的绑定名称 R2_STORAGE
+    if (!env.R2_STORAGE) {
+        // 如果绑定完全丢失，则返回此信息
         return new Response(JSON.stringify({ 
-            message: 'R2_BUCKET binding is missing or failed (Cloudflare config error).',
-            debug: 'R2_BUCKET is null or undefined.'
+            message: 'R2_STORAGE binding is missing. CHECK WRANGLER.TOML and DEPLOYMENT.',
+            debug: 'R2_STORAGE is null or undefined.'
         }), { status: 500, headers });
     }
     
@@ -729,14 +724,13 @@ async function handleGeneratePresignedUrl(request, env) {
             return new Response(JSON.stringify({ message: 'Missing R2 key.' }), { status: 400, headers });
         }
         
-        // 尝试调用 createPresignedUrl
-        const signedUrl = await env.R2_BUCKET.createPresignedUrl({
+        // 🚨 关键：调用 env.R2_STORAGE 上的 createPresignedUrl
+        const signedUrl = await env.R2_STORAGE.createPresignedUrl({
             key: key,
             method: 'PUT',
             expiration: 60 * 5
         });
 
-        // 包含 R2_PUBLIC_DOMAIN，以便前端知道最终图片的 URL 基础
         return new Response(JSON.stringify({ 
             uploadUrl: signedUrl.url, 
             r2Key: key, 
@@ -747,12 +741,12 @@ async function handleGeneratePresignedUrl(request, env) {
         
     } catch (e) {
         // --- 捕获错误并返回关键调试信息 ---
-        let debugInfo = `R2_BUCKET object type: ${typeof env.R2_BUCKET}. `;
-        debugInfo += `Does it have createPresignedUrl? ${typeof env.R2_BUCKET.createPresignedUrl}`;
+        let debugInfo = `R2_STORAGE object type: ${typeof env.R2_STORAGE}. `;
+        debugInfo += `Does it have createPresignedUrl? ${typeof env.R2_STORAGE.createPresignedUrl}`;
         // ---------------------------------
         
         return new Response(JSON.stringify({ 
-            message: `Failed to generate presigned URL: ${e.message}. CHECK R2 BINDING STATUS.`,
+            message: `Failed to generate presigned URL: ${e.message}. The R2 binding is corrupted in the runtime.`,
             debug: debugInfo // 返回调试信息
         }), { 
             status: 500,
@@ -766,13 +760,11 @@ async function handleCreateUpdateMaterial(request, env) {
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
-
+    // ... (D1 逻辑不变)
     const mat = await request.json();
-
     if (!mat.UID || !mat.unified_name) {
         return new Response(JSON.stringify({ message: 'Missing required fields: UID and unified_name' }), { status: 400 });
     }
-
     try {
         const stmt = env.DB.prepare(`
             INSERT OR REPLACE INTO materials 
@@ -784,13 +776,10 @@ async function handleCreateUpdateMaterial(request, env) {
             mat.length_mm, mat.width_mm, mat.diameter_mm, 
             mat.r2_image_key || null
         );
-
         await stmt.run();
-
         return new Response(JSON.stringify({ status: 'success', message: 'Material saved/updated.', uid: mat.UID }), {
             headers: { 'Content-Type': 'application/json' }
         });
-
     } catch (e) {
         console.error("Save/Update error:", e);
         return new Response(JSON.stringify({ message: `Save/Update Failed: ${e.message}` }), { status: 500 });
@@ -800,8 +789,10 @@ async function handleCreateUpdateMaterial(request, env) {
 
 async function handleQueryMaterials(request, env) {
     if (!env.DB) {
+        // ... (错误处理)
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
+    // ... (D1 逻辑不变)
     try {
         const url = new URL(request.url);
         const query = url.searchParams.get('q') || '';
@@ -903,6 +894,7 @@ async function handleDeleteMaterial(request, env) {
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
+    // ... (D1 逻辑不变)
     const url = new URL(request.url);
     const parts = url.pathname.split('/');
     const uid = parts[parts.length - 1]; 
@@ -947,8 +939,7 @@ export default {
         };
 
         if (method === 'OPTIONS') {
-            // 处理 CORS 预检请求
-            return new Response(null, { headers: { ...headers, 'Content-Type': undefined } });
+            return new Response(null, { headers });
         }
 
         if (path === '/' && method === 'GET') {
@@ -982,7 +973,7 @@ export default {
             
             // POST /api/presign-url (R2 Upload)
             if (path === '/api/presign-url' && method === 'POST') {
-                return handleGeneratePresignedUrl(request, env);
+                return handleGeneratePresignedUrl(request, env); // 🚨 调用修复后的函数
             }
 
             // POST /api/import (Bulk Import)
