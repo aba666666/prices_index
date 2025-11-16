@@ -214,10 +214,10 @@ const FRONTEND_HTML = `
             </table>
         </div>
     </div>
+    `
     
 
     <script>
-    `
         const API_BASE_URL = '/api'; 
         // 完整的数据库字段列表，用于表单和 CSV 解析映射
         const FIELD_NAMES = ["UID", "unified_name", "material_type", "sub_category", "alias", "color", "model_number", "length_mm", "width_mm", "diameter_mm", "r2_image_key"];
