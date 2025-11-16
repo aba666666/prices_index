@@ -24,7 +24,7 @@ const FRONTEND_HTML = `
             box-shadow: 0 4px 8px rgba(0,0,0,0.1);
             border-radius: 8px;
         }
-        input:not([type="file"]):not([type="checkbox"]):not([type="radio"]), select, textarea { /* 新增 textarea */
+        input:not([type="file"]):not([type="checkbox"]):not([type="radio"]), select, textarea { 
             padding: 8px;
             margin: 5px 0;
             width: 100%;
@@ -78,7 +78,7 @@ const FRONTEND_HTML = `
             max-height: 50px; 
             object-fit: cover;
             border-radius: 4px;
-            cursor: pointer; /* 提示用户可以点击 */
+            cursor: pointer; 
             transition: opacity 0.3s;
         }
         .material-img:hover {
@@ -90,15 +90,11 @@ const FRONTEND_HTML = `
             align-items: center;
         }
         .readonly-mode {
-            background-color: #ffffe0; /* 浅黄色背景提示只读 */
+            background-color: #ffffe0; 
             padding: 10px;
             margin-bottom: 20px;
             border-left: 5px solid #ffc107;
             font-weight: bold;
-        }
-        /* 新增样式：备注字段可以占据一行 */
-        .full-width-group {
-            flex-basis: 100%; 
         }
     </style>
 </head>
@@ -147,20 +143,20 @@ const FRONTEND_HTML = `
                 
                 <div class="form-row">
                     <div class="form-group">
+                        <label for="f_unit">单位</label>
+                        <input type="text" id="f_unit" name="unit" placeholder="例如: 块, 个, 套, 米">
+                    </div>
+                    <div class="form-group">
                         <label for="f_length_mm">长度 (mm)</label>
                         <input type="number" step="0.01" id="f_length_mm" name="length_mm">
                     </div>
                     <div class="form-group">
-                        <label for="f_width_mm">宽度 (mm)</label>
+                        <label for="f_width_mm">宽度/高度 (mm)</label> 
                         <input type="number" step="0.01" id="f_width_mm" name="width_mm">
                     </div>
                     <div class="form-group">
                         <label for="f_diameter_mm">直径 (mm)</label>
                         <input type="number" step="0.01" id="f_diameter_mm" name="diameter_mm">
-                    </div>
-                    <div class="form-group">
-                        <label for="f_color">颜色</label>
-                        <input type="text" id="f_color" name="color">
                     </div>
                 </div>
                 
@@ -172,6 +168,10 @@ const FRONTEND_HTML = `
                     <div class="form-group">
                         <label for="f_notes">备注信息</label>
                         <textarea id="f_notes" name="notes" rows="1" placeholder="例如：采购信息、使用说明等"></textarea>
+                    </div>
+                     <div class="form-group">
+                        <label for="f_color">颜色</label>
+                        <input type="text" id="f_color" name="color">
                     </div>
                     <div class="form-group">
                         <label for="f_alias">别名</label>
@@ -204,7 +204,7 @@ const FRONTEND_HTML = `
 
         <div id="query-section">
             <h2>🔍 材料查询与管理</h2>
-            <input type="text" id="search-query" placeholder="输入名称、型号或UID进行查询" style="width: 400px;">
+            <input type="text" id="search-query" placeholder="输入名称、型号、UID或单位进行查询" style="width: 400px;">
             <button onclick="fetchMaterials()">查询</button>
             
             <table id="results-table">
@@ -212,14 +212,15 @@ const FRONTEND_HTML = `
                     <tr>
                         <th style="width: 5%;">图片</th>
                         <th style="width: 15%;">统一名称</th>
-                        <th style="width: 10%;">材质(大类)</th>
-                        <th style="width: 10%;">小类</th>
-                        <th style="width: 10%;">型号</th>
-                        <th style="width: 10%;">规格/尺寸</th>
+                        <th style="width: 8%;">材质(大类)</th>
+                        <th style="width: 8%;">小类</th>
+                        <th style="width: 8%;">型号</th>
+                        <th style="width: 5%;">单位</th> <th style="width: 8%;">规格/尺寸</th>
                         <th style="width: 7%;">直径</th>
                         <th style="width: 7%;">颜色</th>
                         <th style="width: 10%;">唯一识别码(UID)</th>
-                        <th style="width: 10%;">备注信息</th> <th id="actions-header" style="width: 6%;">操作</th>
+                        <th style="width: 10%;">备注信息</th> 
+                        <th id="actions-header" style="width: 5%;">操作</th>
                     </tr>
                 </thead>
                 <tbody id="results-body">
@@ -230,11 +231,12 @@ const FRONTEND_HTML = `
 
     <script>
         const API_BASE_URL = '/api'; 
-        // 按照新的表格顺序重新定义字段数组，确保 notes 字段加入
+        // 按照新的顺序重新定义字段数组，新增 unit 字段
         const FIELD_NAMES = [
             "unified_name", "material_type", "sub_category", "model_number", 
+            "unit", // <-- NEW
             "length_mm", "width_mm", "diameter_mm", "color", 
-            "UID", "notes", "alias", "r2_image_key" // notes 和 UID 顺序互换，notes 加入
+            "UID", "notes", "alias", "r2_image_key"
         ];
         let isReadOnly = false;
 
@@ -243,12 +245,10 @@ const FRONTEND_HTML = `
             const guest = localStorage.getItem('isGuest');
 
             if (token) {
-                // 已登录管理员
                 isReadOnly = false;
                 showMainSection();
                 fetchMaterials(); 
             } else if (guest === 'true') {
-                // 访客模式
                 isReadOnly = true;
                 showMainSection();
                 setReadOnlyMode();
@@ -263,19 +263,11 @@ const FRONTEND_HTML = `
 
         function setReadOnlyMode() {
             isReadOnly = true;
-            // 隐藏所有修改部分
             document.getElementById('manual-section').style.display = 'none';
             document.getElementById('import-section').style.display = 'none';
             document.getElementById('logout-btn').style.display = 'none';
-            
-            // 显示只读通知
             document.getElementById('read-only-notice').style.display = 'block';
-            
-            // 隐藏操作列头
             document.getElementById('actions-header').style.display = 'none';
-
-            // 重新渲染表格以隐藏操作按钮
-            // fetchMaterials() 会在 onload 时调用
         }
 
         // --- 核心 CRUD & Upload 逻辑 ---
@@ -291,11 +283,9 @@ const FRONTEND_HTML = `
 
         function getFormData() {
             const data = {};
-            // 使用新的 FIELD_NAMES 顺序遍历
             FIELD_NAMES.forEach(name => {
                 const element = document.getElementById('f_' + name);
                 if (element) {
-                    // 对于数字类型，确保为空时不传递字符串 "null" 或空字符串
                     if (name.endsWith('_mm')) {
                         data[name] = element.value ? parseFloat(element.value) : null;
                     } else {
@@ -332,7 +322,7 @@ const FRONTEND_HTML = `
                 if (response.ok && result.status === 'success') {
                     status.textContent = \`记录 \${result.uid} 保存成功！\`;
                     status.style.color = 'green';
-                    fetchMaterials(); // 刷新列表
+                    fetchMaterials(); 
                 } else {
                     status.textContent = \`保存失败: \${result.message || response.statusText}\`;
                     status.style.color = 'red';
@@ -414,7 +404,7 @@ const FRONTEND_HTML = `
                 headers.forEach((header, index) => {
                     if (index < values.length) {
                         const key = header.toLowerCase().replace(/[^a-z0-9_]/g, ''); 
-                        // 匹配字段，允许notes
+                        // 匹配字段，允许 notes, unit
                         const matchedField = FIELD_NAMES.find(f => f.toLowerCase() === key || f.toLowerCase().includes(key));
                         if (matchedField) {
                              item[matchedField] = values[index].trim().replace(/['"]+/g, '');
@@ -422,7 +412,7 @@ const FRONTEND_HTML = `
                     }
                 });
 
-                // 兼容旧格式或简单CSV（按顺序匹配）
+                // 兼容旧格式或简单CSV（按 FIELD_NAMES 顺序匹配）
                 if (Object.keys(item).length < 3) { 
                     item = {};
                     FIELD_NAMES.forEach((field, index) => {
@@ -555,7 +545,7 @@ const FRONTEND_HTML = `
         }
 
 
-        // --- 登录/退出/访客功能 ---
+        // --- 登录/退出/访客功能 (保持不变) ---
         async function handleLogin() {
             const username = document.getElementById('username').value;
             const password = document.getElementById('password').value;
@@ -573,7 +563,7 @@ const FRONTEND_HTML = `
                 if (response.ok) {
                     const data = await response.json();
                     localStorage.setItem('jwtToken', data.token);
-                    localStorage.removeItem('isGuest'); // 清除访客标记
+                    localStorage.removeItem('isGuest'); 
                     status.textContent = '登录成功！(管理员模式)';
                     status.style.color = 'green';
                     
@@ -582,7 +572,7 @@ const FRONTEND_HTML = `
                     document.getElementById('manual-section').style.display = 'block';
                     document.getElementById('import-section').style.display = 'block';
                     document.getElementById('logout-btn').style.display = 'block';
-                    document.getElementById('actions-header').style.display = 'table-cell'; // 显示操作列头
+                    document.getElementById('actions-header').style.display = 'table-cell'; 
 
                     showMainSection();
                     fetchMaterials();
@@ -619,43 +609,43 @@ const FRONTEND_HTML = `
             isReadOnly = false;
         }
 
-        // --- 查询和渲染 (更新表格结构) ---
+        // --- 查询和渲染 (更新表格结构和逻辑) ---
 
         async function fetchMaterials() {
             const query = document.getElementById('search-query').value;
-            // 访客模式下也允许查询
             const token = localStorage.getItem('jwtToken'); 
             const body = document.getElementById('results-body');
-            body.innerHTML = '<tr><td colspan="11" style="text-align: center;">正在查询...</td></tr>'; // 调整列数
+            // 调整列数 (12列)
+            body.innerHTML = '<tr><td colspan="12" style="text-align: center;">正在查询...</td></tr>'; 
             
-            if (!token && !isReadOnly) { // 既没Token也不是访客模式，理论上不应该发生，但作为安全检查
-                body.innerHTML = '<tr><td colspan="11" style="color: red; text-align: center;">请先登录或以访客身份查看。</td></tr>';
+            if (!token && !isReadOnly) { 
+                body.innerHTML = '<tr><td colspan="12" style="color: red; text-align: center;">请先登录或以访客身份查看。</td></tr>';
                 return;
             }
 
             try {
                 const response = await fetch(\`\${API_BASE_URL}/materials?q=\${encodeURIComponent(query)}\`, {
-                    headers: token ? { 'Authorization': 'Bearer ' + token } : {} // 访客模式无须 Authorization
+                    headers: token ? { 'Authorization': 'Bearer ' + token } : {} 
                 });
 
                 if (response.ok) {
                     const materials = await response.json();
                     renderMaterials(materials);
                 } else if (response.status === 403 || response.status === 401) {
-                    body.innerHTML = '<tr><td colspan="11" style="color: red; text-align: center;">权限过期，请重新登录。</td></tr>';
+                    body.innerHTML = '<tr><td colspan="12" style="color: red; text-align: center;">权限过期，请重新登录。</td></tr>';
                     handleLogout();
                 } else {
-                    body.innerHTML = '<tr><td colspan="11" style="color: red; text-align: center;">查询失败: ' + response.statusText + '</td></tr>';
+                    body.innerHTML = '<tr><td colspan="12" style="color: red; text-align: center;">查询失败: ' + response.statusText + '</td></tr>';
                 }
             } catch (error) {
-                body.innerHTML = '<tr><td colspan="11" style="color: red; text-align: center;">网络错误: ' + error.message + '</td></tr>';
+                body.innerHTML = '<tr><td colspan="12" style="color: red; text-align: center;">网络错误: ' + error.message + '</td></tr>';
             }
         }
 
         function renderMaterials(materials) {
             const body = document.getElementById('results-body');
             body.innerHTML = ''; 
-            const totalCols = isReadOnly ? 10 : 11; // 访客模式下是 10 列 (不显示操作列)
+            const totalCols = isReadOnly ? 11 : 12; // 访客模式下是 11 列 (不显示操作列)
 
             if (materials.length === 0) {
                 body.innerHTML = \`<tr><td colspan="\${totalCols}" style="text-align: center;">未找到匹配的材料。</td></tr>\`;
@@ -666,15 +656,23 @@ const FRONTEND_HTML = `
                 const row = body.insertRow();
                 
                 let dimensions = '';
-                if (mat.length_mm && mat.width_mm) {
-                    dimensions = \`\${mat.length_mm} x \${mat.width_mm} mm\`;
-                } else if (mat.length_mm) {
-                    dimensions = \`\${mat.length_mm} mm\`;
-                } else if (mat.width_mm) {
-                    dimensions = \`\${mat.width_mm} mm\`;
+                const length = mat.length_mm;
+                const width = mat.width_mm;
+                const diameter = mat.diameter_mm;
+                
+                // 根据用户逻辑调整规格/尺寸显示
+                if (diameter && width) {
+                    // 圆柱体：直径+宽度/高度
+                    dimensions = \`高: \${width} mm\`; 
+                } else if (length && width) {
+                    // 平面：长 x 宽
+                    dimensions = \`\${length} x \${width} mm\`;
+                } else if (length) {
+                    dimensions = \`\${length} mm\`;
+                } else if (width) {
+                    dimensions = \`\${width} mm\`;
                 }
                 
-                // 移除不必要的字段，只保留需要传给 handleEdit 的数据
                 const cleanMat = JSON.stringify(mat).replace(/'/g, "\\\\'"); 
                 
                 // 1. 图片单元格
@@ -697,22 +695,25 @@ const FRONTEND_HTML = `
                 // 5. 型号
                 row.insertCell().textContent = mat.model_number || '-';
                 
-                // 6. 规格/尺寸
+                // 6. 单位 (NEW)
+                row.insertCell().textContent = mat.unit || '-';
+                
+                // 7. 规格/尺寸
                 row.insertCell().textContent = dimensions || '-';
                 
-                // 7. 直径
-                row.insertCell().textContent = mat.diameter_mm ? \`Ø\${mat.diameter_mm} mm\` : '-';
+                // 8. 直径
+                row.insertCell().textContent = diameter ? \`Ø\${diameter} mm\` : '-';
 
-                // 8. 颜色
+                // 9. 颜色
                 row.insertCell().textContent = mat.color || '-';
                 
-                // 9. 唯一识别码(UID) - 在备注信息前
+                // 10. 唯一识别码(UID) 
                 row.insertCell().textContent = mat.UID;
                 
-                // 10. 备注信息 (新增)
+                // 11. 备注信息
                 row.insertCell().textContent = mat.notes || '-';
 
-                // 11. 操作 (只在管理员模式下显示)
+                // 12. 操作 (只在管理员模式下显示)
                 if (!isReadOnly) {
                     const actionsCell = row.insertCell();
                     actionsCell.innerHTML = \`
@@ -723,12 +724,11 @@ const FRONTEND_HTML = `
                 } else {
                     // 访客模式下，操作列不插入单元格，保持列数一致
                     row.insertCell().textContent = '禁止操作'; 
-                    row.cells[row.cells.length - 1].style.display = 'none'; // 确保单元格不显示
+                    row.cells[row.cells.length - 1].style.display = 'none'; 
                 }
             });
             
-             // 确保表格的头部和主体在访客模式下保持一致
-            if (isReadOnly) {
+             if (isReadOnly) {
                  document.getElementById('actions-header').style.display = 'none';
             }
         }
@@ -753,12 +753,11 @@ function getPublicImageUrl(r2_key, env) {
 }
 
 
-// --- 鉴权中间件 ---
+// --- 鉴权中间件 (保持不变) ---
 
 async function authenticate(request, env) {
     const authHeader = request.headers.get('Authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        // 允许未认证的请求继续，但后面需要检查是否是只读操作
         return { authorized: false, status: 401 }; 
     }
     const token = authHeader.split(' ')[1];
@@ -776,19 +775,16 @@ async function authenticate(request, env) {
 
 // --- API 路由处理函数 ---
 
-// 仅管理员可执行的操作列表
 const ADMIN_ACTIONS = ['POST', 'PUT', 'DELETE'];
 
-// 检查是否为只读操作（GET是只读，其他是管理员操作）
 function isReadOnlyRequest(method, path) {
     if (method === 'GET') {
-        return true; // GET 请求全部视为只读
+        return true; 
     }
-    // 所有涉及修改数据的 API 路径都必须由管理员执行
     if (ADMIN_ACTIONS.includes(method)) {
         return false;
     }
-    return true; // 其他非修改方法（如OPTIONS）也视为安全
+    return true; 
 }
 
 
@@ -860,8 +856,8 @@ async function handleDirectUpload(request, env) {
 
     try {
         const formData = await request.formData();
-        const file = formData.get('file'); // 接收前端的 Blob/File
-        const r2Key = formData.get('key'); // 接收前端指定的 R2 Key
+        const file = formData.get('file'); 
+        const r2Key = formData.get('key'); 
 
         if (!file || !r2Key || typeof file === 'string') {
             return new Response(JSON.stringify({ message: 'Missing file or R2 key in form data or file is empty.' }), { status: 400, headers });
@@ -890,7 +886,7 @@ async function handleDirectUpload(request, env) {
 }
 
 async function handleCreateUpdateMaterial(request, env) {
-    // *** 后端 D1 SQL 语句增加 notes 字段 ***
+    // *** 后端 D1 SQL 语句新增 unit 字段 ***
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
@@ -902,18 +898,19 @@ async function handleCreateUpdateMaterial(request, env) {
     }
 
     try {
-        // 更新 SQL 语句以包含 notes 字段
+        // 更新 SQL 语句以包含 unit 字段
         const stmt = env.DB.prepare(`
             INSERT OR REPLACE INTO materials 
-            (UID, unified_name, material_type, sub_category, model_number, length_mm, width_mm, diameter_mm, color, notes, alias, r2_image_key)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (UID, unified_name, material_type, sub_category, model_number, length_mm, width_mm, diameter_mm, color, notes, alias, r2_image_key, unit)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).bind(
             mat.UID, mat.unified_name, mat.material_type, mat.sub_category, mat.model_number, 
             mat.length_mm, mat.width_mm, mat.diameter_mm, 
             mat.color,
-            mat.notes || null, // 新增 notes 字段绑定
+            mat.notes || null, 
             mat.alias,
-            mat.r2_image_key || null
+            mat.r2_image_key || null,
+            mat.unit || null // NEW: unit 字段绑定
         );
 
         await stmt.run();
@@ -930,7 +927,7 @@ async function handleCreateUpdateMaterial(request, env) {
 
 
 async function handleQueryMaterials(request, env) {
-    // *** 后端 D1 SQL 语句增加 notes 字段的查询 ***
+    // *** 后端 D1 SQL 语句增加 unit 字段的查询 ***
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
@@ -942,13 +939,13 @@ async function handleQueryMaterials(request, env) {
         
         if (query) {
             const searchPattern = `%${query}%`;
-            // 增加 notes 字段到 WHERE 子句
+            // 增加 unit 字段到 WHERE 子句
             stmt = env.DB.prepare(`
                 SELECT * FROM materials 
                 WHERE UID LIKE ? OR unified_name LIKE ? 
-                   OR alias LIKE ? OR sub_category LIKE ? OR model_number LIKE ? OR notes LIKE ?
+                   OR alias LIKE ? OR sub_category LIKE ? OR model_number LIKE ? OR notes LIKE ? OR unit LIKE ? 
                 LIMIT 100
-            `).bind(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern); 
+            `).bind(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern); // 增加了一个 unit 的绑定
         } else {
             stmt = env.DB.prepare("SELECT * FROM materials LIMIT 100");
         }
@@ -972,7 +969,7 @@ async function handleQueryMaterials(request, env) {
 
 
 async function handleImportMaterials(request, env) {
-    // *** 后端 D1 SQL 语句增加 notes 字段 ***
+    // *** 后端 D1 SQL 语句新增 unit 字段 ***
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
@@ -996,20 +993,21 @@ async function handleImportMaterials(request, env) {
                 errorMessages.push(`Missing UID for material: ${mat.unified_name || 'unknown'}`);
                 return null;
             }
-            // 更新 SQL 语句以包含 notes 字段
+            // 更新 SQL 语句以包含 unit 字段
             return env.DB.prepare(`
                 INSERT OR REPLACE INTO materials 
-                (UID, unified_name, material_type, sub_category, model_number, length_mm, width_mm, diameter_mm, color, notes, alias, r2_image_key)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (UID, unified_name, material_type, sub_category, model_number, length_mm, width_mm, diameter_mm, color, notes, alias, r2_image_key, unit)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).bind(
                 mat.UID, mat.unified_name, mat.material_type, mat.sub_category, mat.model_number, 
-                parseFloat(mat.length_mm) || null, // 确保数字类型
+                parseFloat(mat.length_mm) || null, 
                 parseFloat(mat.width_mm) || null,
                 parseFloat(mat.diameter_mm) || null,
                 mat.color,
-                mat.notes || null, // 新增 notes 字段绑定
+                mat.notes || null,
                 mat.alias,
-                mat.r2_image_key || null
+                mat.r2_image_key || null,
+                mat.unit || null // NEW: unit 字段绑定
             );
         }).filter(stmt => stmt !== null);
         
@@ -1069,7 +1067,7 @@ async function handleDeleteMaterial(request, env) {
 }
 
 
-// --- 主要 Worker 入口 ---
+// --- 主要 Worker 入口 (保持不变) ---
 
 export default {
     async fetch(request, env, ctx) {
@@ -1098,44 +1096,32 @@ export default {
         
         if (path.startsWith('/api/')) {
             
-            // 1. 检查是否为只读操作 (GET请求一律放行，不需认证)
             if (isReadOnlyRequest(method, path)) {
-                // GET /api/materials (Query) - 允许访客查看
                 if (path === '/api/materials' && method === 'GET') {
                     return handleQueryMaterials(request, env);
                 }
-                // 如果是其他不涉及修改的 GET 请求，也可以放在这里
             }
 
-            // 2. 检查管理员权限 (非 GET/OPTIONS 请求必须认证)
             const authResult = await authenticate(request, env);
             if (!authResult.authorized) {
-                // 如果是 GET 请求，但前面没处理 (即不是 /api/materials)，则返回 404/401
                 if (method === 'GET') {
                     return new Response('Not Found or Unauthorized', { status: 404, headers });
                 }
-                // 否则是修改类请求，直接返回未认证
                 return new Response('Authentication Required for this action', { status: 401, headers });
             }
             
-            // 3. 管理员操作路由
-            
-            // DELETE /api/materials/:uid
             if (path.startsWith('/api/materials/') && method === 'DELETE') {
                 return handleDeleteMaterial(request, env);
             }
 
-            // POST /api/materials (Manual Create/Update)
             if (path === '/api/materials' && method === 'POST') {
                  return handleCreateUpdateMaterial(request, env);
             }
             
-            // POST /api/upload (R2 Direct Upload)
             if (path === '/api/upload' && method === 'POST') {
                 return handleDirectUpload(request, env); 
             }
 
-            // POST /api/import (Bulk Import)
             if (path === '/api/import' && method === 'POST') {
                 return handleImportMaterials(request, env);
             }
