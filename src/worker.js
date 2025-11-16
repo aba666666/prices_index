@@ -716,6 +716,7 @@ async function handleGeneratePresignedUrl(request, env) {
         });
     } catch (e) {
         console.error("Presign error:", e);
+        // 为了排查问题，可以在这里打印 env.R2_BUCKET 的结构（但通常会被 Worker 环境安全策略禁止）
         return new Response(JSON.stringify({ message: `Failed to generate presigned URL: ${e.message}` }), { status: 500 });
     }
 }
