@@ -734,8 +734,7 @@ const FRONTEND_HTML = `
                     const actionsCell = row.insertCell();
                     actionsCell.innerHTML = `
                         <button class="edit-btn" onclick='handleEdit(${cleanMat})'>编辑</button>
-                        <button class="delete-btn" onclick="handleDelete('${mat.UID}')">删除</button>
-                    `;
+                        <button class="delete-btn" onclick="handleDelete('${mat.UID}')">删除</button>`;
                     actionsCell.style.textAlign = 'center';
                 } else {
                     // 访客模式下，操作列不插入单元格，保持列数一致
