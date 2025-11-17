@@ -1,7 +1,7 @@
 // src/worker.js
 import * as jwt from '@tsndr/cloudflare-worker-jwt';
 
-// --- 完整的内嵌前端 HTML/JS (已更新布局、访客逻辑、字段顺序和新增价格列) ---
+// --- 完整的内嵌前端 HTML/JS (已修复模板字符串嵌套转义问题) ---
 const FRONTEND_HTML = `
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -17,7 +17,7 @@ const FRONTEND_HTML = `
             color: #333;
         }
         h1 { color: #007bff; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
-        #query-section, #auth-section, #import-section, #manual-section, #price-query-section { 
+        #query-section, #auth-section, #import-section, #manual-section { 
             margin-bottom: 30px; 
             padding: 20px; 
             background-color: #fff;
@@ -72,6 +72,7 @@ const FRONTEND_HTML = `
             background-color: #e9ecef; 
             font-weight: bold;
         }
+        /* 优化图片样式，确保图片可点击 */
         .material-img { 
             max-width: 50px; 
             max-height: 50px; 
@@ -209,18 +210,16 @@ const FRONTEND_HTML = `
             <table id="results-table">
                 <thead>
                     <tr>
-                        <th style="width: 4%;">图片</th>
-                        <th style="width: 10%;">统一名称</th>
-                        <th style="width: 7%;">材质(大类)</th>
-                        <th style="width: 6%;">小类</th>
-                        <th style="width: 6%;">型号</th>
+                        <th style="width: 5%;">图片</th>
+                        <th style="width: 15%;">统一名称</th>
+                        <th style="width: 8%;">材质(大类)</th>
+                        <th style="width: 8%;">小类</th>
+                        <th style="width: 8%;">型号</th>
                         <th style="width: 5%;">单位</th> 
-                        <th style="width: 7%;">规格/尺寸</th>
-                        <th style="width: 5%;">直径</th>
-                        <th style="width: 5%;">颜色</th>
-                        <th style="width: 8%;">唯一识别码(UID)</th>
-                        <th style="width: 6%;">最终成本</th>
-                        <th style="width: 6%;">最终售价</th>
+                        <th style="width: 8%;">规格/尺寸</th>
+                        <th style="width: 7%;">直径</th>
+                        <th style="width: 7%;">颜色</th>
+                        <th style="width: 10%;">唯一识别码(UID)</th>
                         <th style="width: 10%;">备注信息</th> 
                         <th id="actions-header" style="width: 5%;">操作</th>
                     </tr>
@@ -229,18 +228,11 @@ const FRONTEND_HTML = `
                     </tbody>
             </table>
         </div>
-        
-        <div id="price-query-section">
-            <h2>💰 价格详情查询 (高级)</h2>
-            <input type="text" id="price-query-uid" placeholder="输入物料 UID" style="width: 200px;">
-            <button onclick="fetchPriceDetails()">查询价格详情</button>
-            <pre id="price-details-output" style="background-color: #eee; padding: 10px; border-radius: 4px; margin-top: 10px;"></pre>
-        </div>
-
     </div>
 
     <script>
         const API_BASE_URL = '/api'; 
+        // 按照新的顺序重新定义字段数组，新增 unit 字段
         const FIELD_NAMES = [
             "unified_name", "material_type", "sub_category", "model_number", 
             "unit", 
@@ -276,10 +268,7 @@ const FRONTEND_HTML = `
             document.getElementById('import-section').style.display = 'none';
             document.getElementById('logout-btn').style.display = 'none';
             document.getElementById('read-only-notice').style.display = 'block';
-            
-            // 隐藏操作列头
-            const actionsHeader = document.getElementById('actions-header');
-            if(actionsHeader) actionsHeader.style.display = 'none';
+            document.getElementById('actions-header').style.display = 'none';
         }
 
         // --- 核心 CRUD & Upload 逻辑 ---
@@ -323,7 +312,8 @@ const FRONTEND_HTML = `
             status.style.color = 'blue';
 
             try {
-                const response = await fetch(\`\${API_BASE_URL}/materials\`, {
+                // FIX: 确保在 Worker 编译后输出正确的 JS 模板字符串
+                const response = await fetch(\`\$\{\API\_BASE\_URL\}/materials\`, {
                     method: 'POST',
                     headers: getAuthHeaders(),
                     body: JSON.stringify(data)
@@ -332,11 +322,11 @@ const FRONTEND_HTML = `
                 const result = await response.json();
 
                 if (response.ok && result.status === 'success') {
-                    status.textContent = `记录 ${result.uid} 保存成功！`;
+                    status.textContent = \`记录 \$\{\result\.uid\} 保存成功！\`;
                     status.style.color = 'green';
                     fetchMaterials(); 
                 } else {
-                    status.textContent = `保存失败: ${result.message || response.statusText}`;
+                    status.textContent = \`保存失败: \$\{\result\.message \|\| response\.statusText\}\`;
                     status.style.color = 'red';
                 }
 
@@ -346,7 +336,7 @@ const FRONTEND_HTML = `
             }
         }
 
-        // --- 2. 图片上传 (逻辑不变) ---
+        // --- 2. 图片上传 ---
 
         async function handleImageUpload() {
             if (isReadOnly) return alert('访客模式下禁止操作。');
@@ -360,7 +350,8 @@ const FRONTEND_HTML = `
             if (fileInput.files.length === 0) { status.textContent = '请选择图片文件。'; status.style.color = 'red'; return; }
             
             const file = fileInput.files[0];
-            const r2Key = keyInput.value.trim() || `uploads/${Date.now()}/${file.name}`;
+            // FIX: 确保在 Worker 编译后输出正确的 JS 模板字符串
+            const r2Key = keyInput.value.trim() || \`uploads/\$\{\Date\.now\()\}/\$\{\file\.name\}\`;
             
             status.textContent = '正在直接上传文件到 Worker...';
             status.style.color = 'blue';
@@ -370,7 +361,8 @@ const FRONTEND_HTML = `
                 formData.append('file', file);
                 formData.append('key', r2Key);
                 
-                const uploadResponse = await fetch(`${API_BASE_URL}/upload`, {
+                // FIX: 确保在 Worker 编译后输出正确的 JS 模板字符串
+                const uploadResponse = await fetch(\`\$\{\API\_BASE\_URL\}/upload\`, {
                     method: 'POST',
                     headers: { 'Authorization': 'Bearer ' + token },
                     body: formData 
@@ -383,7 +375,7 @@ const FRONTEND_HTML = `
                 }
 
                 keyInput.value = r2Key; 
-                status.textContent = `图片上传成功！R2 Key: ${r2Key}`;
+                status.textContent = \`图片上传成功！R2 Key: \$\{\r2Key\}\`;
                 status.style.color = 'green';
                 
                 if (document.getElementById('f_UID').value) {
@@ -396,11 +388,11 @@ const FRONTEND_HTML = `
             }
         }
 
-        // --- 3. 批量导入 (逻辑不变) ---
+        // --- 3. 批量导入 ---
         
         function parseCSV(csvText) {
             
-            const lines = csvText.trim().split(/\r?\n/); 
+            const lines = csvText.trim().split(/\\r?\\n/); 
             if (lines.length === 0) return [];
             
             const headerLine = lines[0].split(',');
@@ -416,6 +408,7 @@ const FRONTEND_HTML = `
                 headers.forEach((header, index) => {
                     if (index < values.length) {
                         const key = header.toLowerCase().replace(/[^a-z0-9_]/g, ''); 
+                        // 匹配字段，允许 notes, unit
                         const matchedField = FIELD_NAMES.find(f => f.toLowerCase() === key || f.toLowerCase().includes(key));
                         if (matchedField) {
                              item[matchedField] = values[index].trim().replace(/['"]+/g, '');
@@ -423,6 +416,7 @@ const FRONTEND_HTML = `
                     }
                 });
 
+                // 兼容旧格式或简单CSV（按 FIELD_NAMES 顺序匹配）
                 if (Object.keys(item).length < 3) { 
                     item = {};
                     FIELD_NAMES.forEach((field, index) => {
@@ -470,10 +464,11 @@ const FRONTEND_HTML = `
                         status.textContent = '文件内容错误：请确保是 JSON 数组或格式正确的 CSV。'; status.style.color = 'red'; return;
                     }
 
-                    status.textContent = `正在导入 ${materialsArray.length} 条数据...`;
+                    status.textContent = \`正在导入 \$\{\materialsArray\.length\} 条数据...\`;
                     status.style.color = 'blue';
 
-                    const response = await fetch(`${API_BASE_URL}/import`, {
+                    // FIX: 确保在 Worker 编译后输出正确的 JS 模板字符串
+                    const response = await fetch(\`\$\{\API\_BASE\_URL\}/import\`, {
                         method: 'POST',
                         headers: getAuthHeaders(),
                         body: JSON.stringify(materialsArray)
@@ -482,11 +477,11 @@ const FRONTEND_HTML = `
                     const result = await response.json();
 
                     if (response.ok && result.status === 'success') {
-                        status.textContent = `导入成功！总计处理 ${result.total_processed} 条，导入/更新 ${result.imported_count} 条。`;
+                        status.textContent = \`导入成功！总计处理 \$\{\result\.total\_processed\} 条，导入/更新 \$\{\result\.imported\_count\} 条。\`;
                         status.style.color = 'green';
                         fetchMaterials();
                     } else {
-                        status.textContent = `导入失败: ${result.message || response.statusText}`;
+                        status.textContent = \`导入失败: \$\{\result\.message \|\| response\.statusText\}\`;
                         status.style.color = 'red';
                     }
 
@@ -499,33 +494,34 @@ const FRONTEND_HTML = `
             reader.readAsText(file);
         }
 
-        // --- 4. 删除 (逻辑不变) ---
+        // --- 4. 删除 ---
         
         async function handleDelete(uid) {
             if (isReadOnly) return alert('访客模式下禁止操作。');
-            if (!confirm('确定要删除 UID 为 ' + uid + ' 的材料记录吗？\n此操作不可逆！')) return;
+            if (!confirm('确定要删除 UID 为 ' + uid + ' 的材料记录吗？\\n此操作不可逆！')) return;
             
             const token = localStorage.getItem('jwtToken');
             try {
-                const response = await fetch(`${API_BASE_URL}/materials/${uid}`, {
+                // FIX: 确保在 Worker 编译后输出正确的 JS 模板字符串
+                const response = await fetch(\`\$\{\API\_BASE\_URL\}/materials/\$\{\uid\}\`, {
                     method: 'DELETE',
                     headers: { 'Authorization': 'Bearer ' + token }
                 });
 
                 if (response.ok) {
-                    alert(`记录 ${uid} 删除成功！`);
+                    alert(\`记录 \$\{\uid\} 删除成功！\`);
                     fetchMaterials(); 
                 } else if (response.status === 404) {
-                    alert(`删除失败：记录 ${uid} 未找到。`);
+                    alert(\`删除失败：记录 \$\{\uid\} 未找到。\`);
                 } else {
-                    alert(`删除失败: ${response.statusText}`);
+                    alert(\`删除失败: \$\{\response\.statusText\}\`);
                 }
             } catch (error) {
                 alert('网络错误，删除失败。');
             }
         }
         
-        // --- 5. 表单/UI 辅助功能 (逻辑不变) ---
+        // --- 5. 表单/UI 辅助功能 ---
         
         function resetManualForm() {
             if (isReadOnly) return alert('访客模式下禁止操作。');
@@ -555,7 +551,7 @@ const FRONTEND_HTML = `
         }
 
 
-        // --- 6. 登录/退出/访客功能 (逻辑不变) ---
+        // --- 登录/退出/访客功能 (保持不变) ---
         async function handleLogin() {
             const username = document.getElementById('username').value;
             const password = document.getElementById('password').value;
@@ -564,7 +560,8 @@ const FRONTEND_HTML = `
             status.style.color = 'blue';
 
             try {
-                const response = await fetch(`${API_BASE_URL}/login`, {
+                // FIX: 确保在 Worker 编译后输出正确的 JS 模板字符串
+                const response = await fetch(\`\$\{\API\_BASE\_URL\}/login\`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ username, password })
@@ -582,9 +579,7 @@ const FRONTEND_HTML = `
                     document.getElementById('manual-section').style.display = 'block';
                     document.getElementById('import-section').style.display = 'block';
                     document.getElementById('logout-btn').style.display = 'block';
-                    
-                    const actionsHeader = document.getElementById('actions-header');
-                    if(actionsHeader) actionsHeader.style.display = 'table-cell'; 
+                    document.getElementById('actions-header').style.display = 'table-cell'; 
 
                     showMainSection();
                     fetchMaterials();
@@ -621,24 +616,23 @@ const FRONTEND_HTML = `
             isReadOnly = false;
         }
 
-        // --- 7. 查询和渲染 (已修复语法错误) ---
+        // --- 查询和渲染 (更新表格结构和逻辑) ---
 
         async function fetchMaterials() {
             const query = document.getElementById('search-query').value;
             const token = localStorage.getItem('jwtToken'); 
             const body = document.getElementById('results-body');
-            const totalCols = isReadOnly ? 13 : 14; 
-
-            body.innerHTML = `<tr><td colspan="${totalCols}" style="text-align: center;">正在查询...</td></tr>`; 
+            // 调整列数 (12列)
+            body.innerHTML = '<tr><td colspan="12" style="text-align: center;">正在查询...</td></tr>'; 
             
             if (!token && !isReadOnly) { 
-                body.innerHTML = `<tr><td colspan="${totalCols}" style="color: red; text-align: center;">请先登录或以访客身份查看。</td></tr>`;
+                body.innerHTML = '<tr><td colspan="12" style="color: red; text-align: center;">请先登录或以访客身份查看。</td></tr>';
                 return;
             }
 
             try {
-                // ✅ 修复后的 fetch 调用：确保 URL 和 options 对象之间用逗号 (,) 分隔，而不是在 URL 后面提前关闭括号
-                const response = await fetch(`${API_BASE_URL}/materials?q=${encodeURIComponent(query)}`, {
+                // FIX: 确保在 Worker 编译后输出正确的 JS 模板字符串
+                const response = await fetch(\`\$\{\API\_BASE\_URL\}/materials?q=\$\{\encodeURIComponent\(query)\}\`, {
                     headers: token ? { 'Authorization': 'Bearer ' + token } : {} 
                 });
 
@@ -646,23 +640,24 @@ const FRONTEND_HTML = `
                     const materials = await response.json();
                     renderMaterials(materials);
                 } else if (response.status === 403 || response.status === 401) {
-                    body.innerHTML = `<tr><td colspan="${totalCols}" style="color: red; text-align: center;">权限过期，请重新登录。</td></tr>`;
+                    body.innerHTML = '<tr><td colspan="12" style="color: red; text-align: center;">权限过期，请重新登录。</td></tr>';
                     handleLogout();
                 } else {
-                    body.innerHTML = `<tr><td colspan="${totalCols}" style="color: red; text-align: center;">查询失败: ${response.statusText}</td></tr>`;
+                    body.innerHTML = '<tr><td colspan="12" style="color: red; text-align: center;">查询失败: ' + response.statusText + '</td></tr>';
                 }
             } catch (error) {
-                body.innerHTML = `<tr><td colspan="${totalCols}" style="color: red; text-align: center;">网络错误: ${error.message}</td></tr>`;
+                body.innerHTML = '<tr><td colspan="12" style="color: red; text-align: center;">网络错误: ' + error.message + '</td></tr>';
             }
         }
 
         function renderMaterials(materials) {
             const body = document.getElementById('results-body');
             body.innerHTML = ''; 
-            const totalCols = isReadOnly ? 13 : 14; 
+            const totalCols = isReadOnly ? 11 : 12; // 访客模式下是 11 列 (不显示操作列)
 
             if (materials.length === 0) {
-                body.innerHTML = `<tr><td colspan="${totalCols}" style="text-align: center;">未找到匹配的材料。</td></tr>`;
+                // FIX: 确保在 Worker 编译后输出正确的 HTML 模板字符串
+                body.innerHTML = \`<tr><td colspan="\$\{\totalCols\}" style="text-align: center;">未找到匹配的材料。</td></tr>\`;
                 return;
             }
 
@@ -674,22 +669,30 @@ const FRONTEND_HTML = `
                 const width = mat.width_mm;
                 const diameter = mat.diameter_mm;
                 
+                // 根据用户逻辑调整规格/尺寸显示
                 if (diameter && width) {
-                    dimensions = `高: ${width} mm`; 
+                    // 圆柱体：直径+宽度/高度
+                    // FIX: 确保在 Worker 编译后输出正确的 JS 模板字符串
+                    dimensions = \`高: \$\{\width\} mm\`; 
                 } else if (length && width) {
-                    dimensions = `${length} x ${width} mm`;
+                    // 平面：长 x 宽
+                    // FIX: 确保在 Worker 编译后输出正确的 JS 模板字符串
+                    dimensions = \`\$\{\length\} x \$\{\width\} mm\`;
                 } else if (length) {
-                    dimensions = `${length} mm`;
+                    // FIX: 确保在 Worker 编译后输出正确的 JS 模板字符串
+                    dimensions = \`\$\{\length\} mm\`;
                 } else if (width) {
-                    dimensions = `${width} mm`;
+                    // FIX: 确保在 Worker 编译后输出正确的 JS 模板字符串
+                    dimensions = \`\$\{\width\} mm\`;
                 }
                 
-                const cleanMat = JSON.stringify(mat).replace(/'/g, "\\'"); 
+                const cleanMat = JSON.stringify(mat).replace(/'/g, "\\\\'"); 
                 
                 // 1. 图片单元格
                 const imgCell = row.insertCell();
                 if (mat.image_url) {
-                    imgCell.innerHTML = `<a href="${mat.image_url}" target="_blank"><img src="${mat.image_url}" class="material-img" alt="${mat.unified_name}"></a>`;
+                    // FIX: 确保在 Worker 编译后输出正确的 HTML 模板字符串
+                    imgCell.innerHTML = \`<a href="\$\{\mat\.image\_url\}" target="_blank"><img src="\$\{\mat\.image\_url\}" class="material-img" alt="\$\{\mat\.unified\_name\}"></a>\`;
                 } else {
                     imgCell.textContent = '-';
                 }
@@ -706,14 +709,15 @@ const FRONTEND_HTML = `
                 // 5. 型号
                 row.insertCell().textContent = mat.model_number || '-';
                 
-                // 6. 单位 
+                // 6. 单位 (NEW)
                 row.insertCell().textContent = mat.unit || '-';
                 
                 // 7. 规格/尺寸
                 row.insertCell().textContent = dimensions || '-';
                 
                 // 8. 直径
-                row.insertCell().textContent = diameter ? `Ø${diameter} mm` : '-';
+                // FIX: 确保在 Worker 编译后输出正确的 JS 模板字符串
+                row.insertCell().textContent = diameter ? \`Ø\$\{\diameter\} mm\` : '-';
 
                 // 9. 颜色
                 row.insertCell().textContent = mat.color || '-';
@@ -721,22 +725,17 @@ const FRONTEND_HTML = `
                 // 10. 唯一识别码(UID) 
                 row.insertCell().textContent = mat.UID;
                 
-                // NEW: 11. 最终成本
-                row.insertCell().textContent = mat.final_cost ? `¥ ${mat.final_cost.toFixed(2)}` : 'N/A';
-
-                // NEW: 12. 最终售价
-                row.insertCell().textContent = mat.final_selling_price ? `¥ ${mat.final_selling_price.toFixed(2)}` : 'N/A';
-                
-                // 13. 备注信息
+                // 11. 备注信息
                 row.insertCell().textContent = mat.notes || '-';
 
-                // 14. 操作 (只在管理员模式下显示)
+                // 12. 操作 (只在管理员模式下显示)
                 if (!isReadOnly) {
                     const actionsCell = row.insertCell();
-                    actionsCell.innerHTML = `
-                        <button class="edit-btn" onclick='handleEdit(${cleanMat})'>编辑</button>
-                        <button class="delete-btn" onclick="handleDelete('${mat.UID}')">删除</button>
-                    `;
+                    // FIX: 确保在 Worker 编译后输出正确的 HTML 模板字符串 (注意 onclick 中的单引号转义)
+                    actionsCell.innerHTML = \`
+                        <button class="edit-btn" onclick='handleEdit(\$\{\cleanMat\})'>编辑</button>
+                        <button class="delete-btn" onclick="handleDelete('\$\{\mat\.UID\}')">删除</button>
+                    \`;
                     actionsCell.style.textAlign = 'center';
                 } else {
                     // 访客模式下，操作列不插入单元格，保持列数一致
@@ -746,41 +745,7 @@ const FRONTEND_HTML = `
             });
             
              if (isReadOnly) {
-                 const actionsHeader = document.getElementById('actions-header');
-                 if(actionsHeader) actionsHeader.style.display = 'none';
-            }
-        }
-        
-        // --- 8. 价格详情查询函数 (NEW) ---
-        async function fetchPriceDetails() {
-            const uid = document.getElementById('price-query-uid').value.trim();
-            const output = document.getElementById('price-details-output');
-            const token = localStorage.getItem('jwtToken');
-
-            output.textContent = '正在查询...';
-            
-            if (!uid) {
-                output.textContent = '请输入物料 UID。';
-                return;
-            }
-             if (!token && !isReadOnly) {
-                output.textContent = '请先登录。';
-                return;
-            }
-            
-            try {
-                const response = await fetch(`${API_BASE_URL}/materials/prices?uid=${encodeURIComponent(uid)}`, {
-                    headers: token ? { 'Authorization': 'Bearer ' + token } : {} 
-                });
-
-                if (response.ok) {
-                    const result = await response.json();
-                    output.textContent = JSON.stringify(result, null, 2);
-                } else {
-                    output.textContent = `查询失败 (${response.status}): ${response.statusText}`;
-                }
-            } catch (error) {
-                output.textContent = '网络错误: ' + error.message;
+                 document.getElementById('actions-header').style.display = 'none';
             }
         }
     </script>
@@ -790,16 +755,21 @@ const FRONTEND_HTML = `
 
 // --- Worker 后端逻辑 ---
 
-// ... (comparePassword, getPublicImageUrl, authenticate 保持不变)
 async function comparePassword(password, storedHash, env) {
-    // 简化处理，实际生产环境需使用 bcrypt/Argon2 等哈希算法
+    // 假设您的 D1 数据库中存储的是 'testpass' 
     return password === storedHash;
 }
+
+
+// --- R2 URL 生成函数 ---
 
 function getPublicImageUrl(r2_key, env) {
     if (!r2_key || !env.R2_PUBLIC_DOMAIN) return null;
     return `${env.R2_PUBLIC_DOMAIN}/${r2_key}`;
 }
+
+
+// --- 鉴权中间件 (保持不变) ---
 
 async function authenticate(request, env) {
     const authHeader = request.headers.get('Authorization');
@@ -819,172 +789,23 @@ async function authenticate(request, env) {
     }
 }
 
+// --- API 路由处理函数 ---
 
-// --- NEW: 价格计算和同步逻辑 ---
+const ADMIN_ACTIONS = ['POST', 'PUT', 'DELETE'];
 
-/**
- * 核心计算函数：根据供应商最新价格和公式配置，计算并同步最终材料价格。
- */
-async function calculateAndSyncMaterialPrice(env, material_uid) {
-    
-    // 1. 获取公式配置
-    const formulaStmt = env.DB.prepare(
-        "SELECT * FROM price_formulas WHERE material_uid = ?"
-    ).bind(material_uid);
-    let formula = (await formulaStmt.all()).results[0];
-
-    // 如果没有公式，使用默认公式
-    if (!formula) {
-        formula = { 
-            formula_type: 'MIN_SUPPLIER', // 默认取最低价
-            markup_rate: 0.2, 
-            tariff_rate: 0.05, 
-            shipping_cost: 10.0 
-        };
+function isReadOnlyRequest(method, path) {
+    if (method === 'GET') {
+        return true; 
     }
-
-    // 2. 获取所有供应商的最新原始价格
-    const pricesStmt = env.DB.prepare(
-        "SELECT base_price FROM supplier_prices WHERE material_uid = ?"
-    ).bind(material_uid);
-    const supplierPrices = (await pricesStmt.all()).results.map(r => r.base_price);
-    
-    if (supplierPrices.length === 0) {
-        console.warn(`No supplier prices found for UID: ${material_uid}`);
-        return; 
+    if (ADMIN_ACTIONS.includes(method)) {
+        return false;
     }
-
-    // 3. 确定基础采购价格 (Base Purchase Price)
-    let basePurchasePrice;
-    
-    switch (formula.formula_type) {
-        case 'MIN_SUPPLIER': // 取所有供应商中的最低价
-            basePurchasePrice = Math.min(...supplierPrices);
-            break;
-        case 'COST_PLUS': // 假设默认取最低价或第一个价
-        default:
-            basePurchasePrice = Math.min(...supplierPrices); 
-            break;
-    }
-
-    // 4. 执行计算逻辑
-    const tariffRate = formula.tariff_rate || 0;
-    const markupRate = formula.markup_rate || 0;
-    const shippingCost = formula.shipping_cost || 0;
-
-    // 最终成本价 = (基础采购价格 * (1 + 关税)) + 固定运费
-    const finalCost = (basePurchasePrice * (1 + tariffRate)) + shippingCost;
-
-    // 最终销售价 = 最终成本价 * (1 + 利润率)
-    const finalSellingPrice = finalCost * (1 + markupRate);
-    
-    // 5. 写入 material_final_prices 表
-    const now = new Date().toISOString();
-    const updateStmt = env.DB.prepare(`
-        INSERT OR REPLACE INTO material_final_prices 
-        (material_uid, final_cost, final_selling_price, last_calculated)
-        VALUES (?, ?, ?, ?)
-    `).bind(material_uid, finalCost, finalSellingPrice, now);
-
-    await updateStmt.run();
-    console.log(`Synced price for ${material_uid}: Cost=${finalCost.toFixed(2)}, Selling=${finalSellingPrice.toFixed(2)}`);
+    return true; 
 }
 
-/**
- * 供应商价格更新 API (POST /api/supplier/price)
- * 供供应商通过 API Key/Token 更新其提供的原始价格。
- */
-async function handleSupplierPriceUpdate(request, env) {
-    const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
-    if (!env.DB) {
-        return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500, headers });
-    }
-    
-    // ⚠️ 实际项目中：此处应进行供应商API Key或Token的鉴权
-    // 假设鉴权已通过，并从Token中提取 supplier_id
-
-    const data = await request.json(); 
-    const { supplier_id, material_uid, base_price } = data;
-
-    if (!supplier_id || !material_uid || typeof base_price !== 'number' || base_price < 0) {
-        return new Response(JSON.stringify({ message: 'Missing or invalid fields: supplier_id, material_uid, base_price' }), { status: 400, headers });
-    }
-
-    try {
-        const now = new Date().toISOString();
-        // 1. 更新或插入 supplier_prices 表中的原始报价
-        const stmt = env.DB.prepare(`
-            INSERT OR REPLACE INTO supplier_prices 
-            (supplier_id, material_uid, base_price, last_updated)
-            VALUES (?, ?, ?, ?)
-        `).bind(supplier_id, material_uid, base_price, now);
-
-        await stmt.run();
-
-        // 2. 异步触发价格计算和同步
-        // 使用 await 直接执行计算，这在高并发下可能导致响应延迟，但确保了价格实时性。
-        await calculateAndSyncMaterialPrice(env, material_uid);
-
-        return new Response(JSON.stringify({ 
-            status: 'success', 
-            message: 'Price updated and final material price calculation triggered.', 
-            material_uid 
-        }), {
-            headers
-        });
-
-    } catch (e) {
-        console.error("Supplier Price Update error:", e);
-        return new Response(JSON.stringify({ message: `Update Failed: ${e.message}` }), { status: 500, headers });
-    }
-}
-
-
-/**
- * 内部查询 API，用于查询材料的最终价格和供应商报价。
- * (GET /api/materials/prices?uid=...)
- */
-async function handleMaterialPricesQuery(request, env) {
-    if (!env.DB) {
-        return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
-    }
-    const url = new URL(request.url);
-    const material_uid = url.searchParams.get('uid');
-
-    if (!material_uid) {
-        return new Response(JSON.stringify({ message: 'Missing material UID parameter.' }), { status: 400 });
-    }
-
-    try {
-        // 1. 查最终价格
-        const finalPriceStmt = env.DB.prepare("SELECT * FROM material_final_prices WHERE material_uid = ?").bind(material_uid);
-        const finalPrice = (await finalPriceStmt.all()).results[0] || null;
-
-        // 2. 查所有供应商报价
-        const supplierPricesStmt = env.DB.prepare("SELECT supplier_id, base_price, last_updated FROM supplier_prices WHERE material_uid = ?").bind(material_uid);
-        const supplierPrices = (await supplierPricesStmt.all()).results;
-        
-        // 3. 查公式配置
-        const formulaStmt = env.DB.prepare("SELECT * FROM price_formulas WHERE material_uid = ?").bind(material_uid);
-        const formula = (await formulaStmt.all()).results[0] || null;
-
-        return new Response(JSON.stringify({ 
-            status: 'success',
-            material_uid,
-            final_price: finalPrice,
-            supplier_prices: supplierPrices,
-            formula_config: formula
-        }), {
-            headers: { 'Content-Type': 'application/json' }
-        });
-
-    } catch (e) {
-        console.error("Price Query error:", e);
-        return new Response(JSON.stringify({ message: `Query Failed: ${e.message}` }), { status: 500 });
-    }
-}
 
 async function handleLogin(request, env) {
+    // ... (登录逻辑保持不变)
     if (!env.DB) {
         const { username, password } = await request.json();
         if (username === 'test' && password === 'testpass') {
@@ -1036,6 +857,7 @@ async function handleLogin(request, env) {
 
 
 async function handleDirectUpload(request, env) {
+    // ... (上传逻辑保持不变)
     const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
 
     if (!env.R2_MEDIA) {
@@ -1079,8 +901,8 @@ async function handleDirectUpload(request, env) {
     }
 }
 
-
 async function handleCreateUpdateMaterial(request, env) {
+    // *** 后端 D1 SQL 语句新增 unit 字段 ***
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
@@ -1120,8 +942,8 @@ async function handleCreateUpdateMaterial(request, env) {
 }
 
 
-// --- 修改后的 handleQueryMaterials 函数 (已添加价格联接) ---
 async function handleQueryMaterials(request, env) {
+    // *** 后端 D1 SQL 语句增加 unit 字段的查询 ***
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
@@ -1131,28 +953,17 @@ async function handleQueryMaterials(request, env) {
         
         let stmt;
         
-        let baseSql = `
-            SELECT 
-                m.*, 
-                f.final_cost, 
-                f.final_selling_price, 
-                f.last_calculated 
-            FROM materials m
-            LEFT JOIN material_final_prices f ON m.UID = f.material_uid
-        `;
-        
         if (query) {
             const searchPattern = `%${query}%`;
             // 增加 unit 字段到 WHERE 子句
-            baseSql += `
-                WHERE m.UID LIKE ? OR m.unified_name LIKE ? 
-                   OR m.alias LIKE ? OR m.sub_category LIKE ? OR m.model_number LIKE ? OR m.notes LIKE ? OR m.unit LIKE ? 
+            stmt = env.DB.prepare(`
+                SELECT * FROM materials 
+                WHERE UID LIKE ? OR unified_name LIKE ? 
+                   OR alias LIKE ? OR sub_category LIKE ? OR model_number LIKE ? OR notes LIKE ? OR unit LIKE ? 
                 LIMIT 100
-            `;
-            stmt = env.DB.prepare(baseSql).bind(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern);
+            `).bind(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern); // 增加了一个 unit 的绑定
         } else {
-            baseSql += ` LIMIT 100`;
-            stmt = env.DB.prepare(baseSql);
+            stmt = env.DB.prepare("SELECT * FROM materials LIMIT 100");
         }
         
         const { results } = await stmt.all();
@@ -1174,6 +985,7 @@ async function handleQueryMaterials(request, env) {
 
 
 async function handleImportMaterials(request, env) {
+    // *** 后端 D1 SQL 语句新增 unit 字段 ***
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
@@ -1239,6 +1051,7 @@ async function handleImportMaterials(request, env) {
 }
 
 async function handleDeleteMaterial(request, env) {
+    // ... (删除逻辑保持不变)
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
@@ -1251,7 +1064,6 @@ async function handleDeleteMaterial(request, env) {
     }
 
     try {
-        // 由于设置了外键 ON DELETE CASCADE，删除 materials 表中的记录会自动删除关联的价格记录。
         const result = await env.DB.prepare("DELETE FROM materials WHERE UID = ?").bind(uid).run();
         
         if (result.changes === 0) {
@@ -1271,7 +1083,7 @@ async function handleDeleteMaterial(request, env) {
 }
 
 
-// --- 主要 Worker 入口 (已包含新的路由) ---
+// --- 主要 Worker 入口 (保持不变) ---
 
 export default {
     async fetch(request, env, ctx) {
@@ -1300,32 +1112,17 @@ export default {
         
         if (path.startsWith('/api/')) {
             
-            // --- NEW: 供应商价格更新路由 (无需管理/访客认证) ---
-            if (path === '/api/supplier/price' && method === 'POST') {
-                // ⚠️ 实际环境中需要在这里添加 supplier_id 的 API Key 鉴权
-                return handleSupplierPriceUpdate(request, env); 
-            }
-            
-            // --- NEW & Existing: GET /api/materials (主查询) 和 /api/materials/prices (高级价格查询) ---
-            
-            // 访客和管理员都可访问的主查询
-            if (path === '/api/materials' && method === 'GET') {
-                return handleQueryMaterials(request, env);
-            }
-            
-            // 高级价格查询 (需要登录或授权)
-            if (path === '/api/materials/prices' && method === 'GET') {
-                 // 需要管理员或访客权限
-                const authResult = await authenticate(request, env);
-                if (!authResult.authorized) {
-                    return new Response('Authentication Required for this action', { status: 401, headers });
+            if (isReadOnlyRequest(method, path)) {
+                if (path === '/api/materials' && method === 'GET') {
+                    return handleQueryMaterials(request, env);
                 }
-                return handleMaterialPricesQuery(request, env);
             }
 
-            // --- 管理员操作路由 (需要 JWT Token 认证) ---
             const authResult = await authenticate(request, env);
             if (!authResult.authorized) {
+                if (method === 'GET') {
+                    return new Response('Not Found or Unauthorized', { status: 404, headers });
+                }
                 return new Response('Authentication Required for this action', { status: 401, headers });
             }
             
