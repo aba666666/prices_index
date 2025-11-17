@@ -1,4 +1,4 @@
-// src/worker.js - V4 稳定版 (已重构查询逻辑，解决 Database Query Failed 错误)
+// src/worker.js - V5 稳定版 (整合价格查询、供应商更新及账户注册)
 
 import * as jwt from '@tsndr/cloudflare-worker-jwt';
 
@@ -8,6 +8,16 @@ function uuidv4() {
         var r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
         return v.toString(16);
     });
+}
+
+// 简单的随机密码生成器 (用于供应商注册)
+function generateRandomPassword(length = 8) {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*';
+    let password = '';
+    for (let i = 0; i < length; i++) {
+        password += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return password;
 }
 
 // --- 完整的内嵌前端 HTML/JS (已更新布局、访客逻辑和字段顺序) ---
@@ -26,7 +36,7 @@ const FRONTEND_HTML = `
             color: #333;
         }
         h1 { color: #007bff; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
-        #query-section, #auth-section, #import-section, #manual-section, #price-section { 
+        #query-section, #auth-section, #import-section, #manual-section, #price-section, #supplier-section { 
             margin-bottom: 30px; 
             padding: 20px; 
             background-color: #fff;
@@ -126,6 +136,24 @@ const FRONTEND_HTML = `
             <button onclick="handleLogout()" style="background-color: #007bff; margin-left: 20px;">返回登录</button>
         </div>
         <button onclick="handleLogout()" id="logout-btn" style="float: right; background-color: #dc3545;">退出登录</button>
+        
+        <div id="supplier-section">
+            <h2>👤 供应商账户注册</h2>
+            <form id="supplier-form">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="s_company_name">供应商公司名称 *</label>
+                        <input type="text" id="s_company_name" required placeholder="例如: 阳光文具厂">
+                    </div>
+                    <div class="form-group">
+                        <label for="s_username">供应商登录名 *</label>
+                        <input type="text" id="s_username" required placeholder="例如: yguang123">
+                    </div>
+                </div>
+                <button type="button" onclick="handleSupplierRegister()" id="supplier-register-btn">注册新供应商账户</button>
+                <p id="supplier-status" style="color: blue;"></p>
+            </form>
+        </div>
         
         <div id="manual-section">
             <h2>📝 手动创建 / 编辑记录 <button onclick="resetManualForm()" style="background-color: #17a2b8;">清空表单</button></h2>
@@ -301,6 +329,7 @@ const FRONTEND_HTML = `
             document.getElementById('manual-section').style.display = 'none';
             document.getElementById('import-section').style.display = 'none';
             document.getElementById('price-section').style.display = 'none'; 
+            document.getElementById('supplier-section').style.display = 'none'; // 禁用供应商注册
             document.getElementById('logout-btn').style.display = 'none';
             document.getElementById('read-only-notice').style.display = 'block';
             document.getElementById('actions-header').style.display = 'none';
@@ -426,7 +455,6 @@ const FRONTEND_HTML = `
             const token = localStorage.getItem('jwtToken');
             const status = document.getElementById('price-status');
             
-            // 注意：这里我们只传 company_name，UUID 在后端生成/查找
             const data = {
                 material_uid: document.getElementById('p_material_uid').value.trim(),
                 company_name: document.getElementById('p_company_name').value.trim(),
@@ -468,8 +496,58 @@ const FRONTEND_HTML = `
             }
         }
         // --- END 价格更新 ---
+        
+        // --- 4. 供应商注册 ---
+        async function handleSupplierRegister() {
+            if (isReadOnly) return alert('访客模式下禁止操作。');
+            const token = localStorage.getItem('jwtToken');
+            const status = document.getElementById('supplier-status');
+            
+            const data = {
+                company_name: document.getElementById('s_company_name').value.trim(),
+                username: document.getElementById('s_username').value.trim()
+            };
+            
+            if (!token) { status.textContent = '请先登录。'; status.style.color = 'red'; return; }
+            if (!data.company_name || !data.username) {
+                status.textContent = '请填写有效的 供应商名称 和 登录名。'; 
+                status.style.color = 'red'; 
+                return;
+            }
 
-        // --- 4. 批量导入 (保持原有逻辑) ---
+            status.textContent = '正在注册供应商账户...';
+            status.style.color = 'blue';
+
+            try {
+                const response = await fetch(\`\${API_BASE_URL}/suppliers/register\`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify(data)
+                });
+
+                const result = await response.json();
+
+                if (response.ok && result.status === 'success') {
+                    status.innerHTML = \`
+                        <span style="color: green;">账户注册成功！请记录以下信息：</span>
+                        <br><strong>公司 UUID (Supplier ID):</strong> \${result.supplier_uuid}
+                        <br><strong>登录名 (Username):</strong> \${result.username}
+                        <br><strong>临时密码 (Password):</strong> <span style="color: red;">\${result.password}</span>
+                    \`;
+                } else {
+                    status.textContent = \`账户注册失败: \${result.message || response.statusText}\`;
+                    status.style.color = 'red';
+                }
+
+            } catch (error) {
+                status.textContent = '网络错误，账户注册失败: ' + error.message;
+                status.style.color = 'red';
+            }
+        }
+        // --- END 供应商注册 ---
+
+
+        // --- 5. 批量导入 (保持原有逻辑) ---
         
         function parseCSV(csvText) {
             
@@ -572,7 +650,7 @@ const FRONTEND_HTML = `
             reader.readAsText(file);
         }
 
-        // --- 5. 删除 ---
+        // --- 6. 删除 ---
         
         async function handleDelete(uid) {
             if (isReadOnly) return alert('访客模式下禁止操作。');
@@ -598,7 +676,7 @@ const FRONTEND_HTML = `
             }
         }
         
-        // --- 6. 表单/UI 辅助功能 (handleEdit新增填充价格UID) ---
+        // --- 7. 表单/UI 辅助功能 (handleEdit新增填充价格UID) ---
         
         function resetManualForm() {
             if (isReadOnly) return alert('访客模式下禁止操作。');
@@ -658,6 +736,7 @@ const FRONTEND_HTML = `
                     document.getElementById('manual-section').style.display = 'block';
                     document.getElementById('import-section').style.display = 'block';
                     document.getElementById('price-section').style.display = 'block'; 
+                    document.getElementById('supplier-section').style.display = 'block'; 
                     document.getElementById('logout-btn').style.display = 'block';
                     document.getElementById('actions-header').style.display = 'table-cell'; 
 
@@ -702,6 +781,7 @@ const FRONTEND_HTML = `
             const query = document.getElementById('search-query').value;
             const token = localStorage.getItem('jwtToken'); 
             const body = document.getElementById('results-body');
+            // 调整列数 (13列)
             const totalCols = isReadOnly ? 12 : 13; 
             body.innerHTML = \`<tr><td colspan="\${totalCols}" style="text-align: center;">正在查询...</td></tr>\`; 
             
@@ -777,7 +857,6 @@ const FRONTEND_HTML = `
                 row.insertCell().textContent = mat.UID;
                 
                 const priceCell = row.insertCell();
-                // 关键更新：直接使用 lowest_price_per_unit 字段
                 if (mat.lowest_price_per_unit) {
                      priceCell.innerHTML = \`\${mat.lowest_price_per_unit.toFixed(2)} <span style="font-size: 0.8em; color: #6c757d;">\${mat.price_currency || ''}</span>\`;
                      priceCell.style.fontWeight = 'bold';
@@ -812,6 +891,7 @@ const FRONTEND_HTML = `
 // --- Worker 后端逻辑 ---
 
 async function comparePassword(password, storedHash, env) {
+    // 假设您的 D1 数据库中存储的是 'testpass' 
     return password === storedHash;
 }
 
@@ -875,6 +955,7 @@ async function handleLogin(request, env) {
         
         const user = users[0];
         
+        // 注意：此处是简化的密码比较，实际生产环境应使用 bcrypt/argon2
         if (!await comparePassword(password, user.password_hash || 'testpass', env)) { 
              return new Response('Invalid credentials (Password mismatch)', { status: 401 });
         }
@@ -997,24 +1078,19 @@ async function handleUpdateSupplierPrice(request, env) {
     }
 
     try {
-        // 1. 查找或创建供应商 (使用 company_name 查找，但存储/绑定使用 UUID)
+        // 1. 查找供应商 (必须先注册)
         let supplier_uuid;
         const { results: existingSuppliers } = await env.DB.prepare(
             "SELECT supplier_uuid FROM suppliers WHERE company_name = ?"
         ).bind(company_name).all();
 
-        if (existingSuppliers.length > 0) {
-            supplier_uuid = existingSuppliers[0].supplier_uuid;
-        } else {
-            // 2. 供应商不存在，生成新的 UUID 并创建记录
-            supplier_uuid = uuidv4(); // 使用新的 UUID 生成函数
-            
-            await env.DB.prepare(
-                "INSERT INTO suppliers (supplier_uuid, company_name) VALUES (?, ?)"
-            ).bind(supplier_uuid, company_name).run();
+        if (existingSuppliers.length === 0) {
+            return new Response(JSON.stringify({ message: `Supplier company "${company_name}" not found. Please register the supplier first.` }), { status: 404 });
         }
+        
+        supplier_uuid = existingSuppliers[0].supplier_uuid;
 
-        // 3. 插入或更新价格 (使用 material_uid 和 supplier_uuid 进行联合绑定)
+        // 2. 插入或更新价格 (使用 material_uid 和 supplier_uuid 进行联合绑定)
         await env.DB.prepare(`
             INSERT INTO prices (material_uid, supplier_uuid, price_per_unit, currency, last_updated)
             VALUES (?, ?, ?, ?, datetime('now'))
@@ -1041,6 +1117,71 @@ async function handleUpdateSupplierPrice(request, env) {
     }
 }
 // --- END UPDATED ---
+
+
+// --- NEW: 供应商账户注册 API 处理器 ---
+async function handleRegisterSupplier(request, env) {
+    if (!env.DB) {
+        return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
+    }
+    const data = await request.json();
+    const { company_name, username } = data;
+    
+    if (!company_name || !username) {
+        return new Response(JSON.stringify({ message: 'Missing required fields: company_name and username.' }), { status: 400 });
+    }
+
+    try {
+        // 1. 检查供应商是否已注册
+        const { results: existingSuppliers } = await env.DB.prepare(
+            "SELECT supplier_uuid FROM suppliers WHERE company_name = ?"
+        ).bind(company_name).all();
+
+        if (existingSuppliers.length > 0) {
+            return new Response(JSON.stringify({ message: `Supplier company "${company_name}" already exists (UUID: ${existingSuppliers[0].supplier_uuid}).` }), { status: 409 });
+        }
+
+        // 2. 检查用户名是否已存在 (在 users 表中)
+        const { results: existingUsers } = await env.DB.prepare(
+            "SELECT id FROM users WHERE username = ?"
+        ).bind(username).all();
+        
+        if (existingUsers.length > 0) {
+            return new Response(JSON.stringify({ message: `Username "${username}" already exists.` }), { status: 409 });
+        }
+
+        // 3. 生成 UUID 和密码
+        const supplier_uuid = uuidv4(); 
+        const temporary_password = generateRandomPassword(); // 临时密码
+
+        // 4. 插入 suppliers 表
+        await env.DB.prepare(
+            "INSERT INTO suppliers (supplier_uuid, company_name) VALUES (?, ?)"
+        ).bind(supplier_uuid, company_name).run();
+
+        // 5. 插入 users 表 (假设 users 表结构为 id, username, password_hash, role)
+        // 注意：这里使用临时密码作为 password_hash，实际应使用哈希函数
+        await env.DB.prepare(
+            "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)"
+        ).bind(username, temporary_password, 'supplier').run();
+
+
+        return new Response(JSON.stringify({ 
+            status: 'success', 
+            message: 'Supplier and user registered successfully.', 
+            supplier_uuid,
+            username,
+            password: temporary_password // ⚠️ 实际生产环境不应返回明文密码
+        }), {
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+    } catch (e) {
+        console.error("Supplier Registration error:", e);
+        return new Response(JSON.stringify({ message: `Registration Failed: ${e.message}` }), { status: 500 });
+    }
+}
+// --- END NEW ---
 
 
 // --- 关键更新：使用 CTE (WITH) 和 Window Function 实现稳定查询 ---
@@ -1091,15 +1232,14 @@ async function handleQueryMaterials(request, env) {
         const { results } = await stmt.all();
 
         const materialsWithUrls = results.map(mat => {
-            // 直接使用 JOIN 带来的两个字段
             const lowest_price_per_unit = mat.lowest_price_per_unit ? parseFloat(mat.lowest_price_per_unit) : null; 
             const currency = mat.price_currency || null; 
             
             return {
                 ...mat,
                 image_url: getPublicImageUrl(mat.r2_image_key, env),
-                lowest_price_per_unit: lowest_price_per_unit, // 注意：这里是 REAL 类型，在 JS 中是 Number
-                price_currency: currency // 确保是 string
+                lowest_price_per_unit: lowest_price_per_unit,
+                price_currency: currency
             }
         });
 
@@ -1109,7 +1249,7 @@ async function handleQueryMaterials(request, env) {
 
     } catch (e) {
         console.error("Query error:", e);
-        // 捕获到错误时，返回详细信息以便调试
+        // 如果表不存在，会返回 D1_ERROR
         return new Response(JSON.stringify({ message: `Database Query Failed: ${e.message}`, debug: "Please ensure D1 migration 0002 has been applied correctly." }), { status: 500 });
     }
 }
@@ -1180,6 +1320,7 @@ async function handleImportMaterials(request, env) {
     }
 }
 
+
 async function handleDeleteMaterial(request, env) {
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
@@ -1193,6 +1334,7 @@ async function handleDeleteMaterial(request, env) {
     }
 
     try {
+        // 删除材料记录，由于外键约束，关联的价格记录也会被删除
         const result = await env.DB.prepare("DELETE FROM materials WHERE UID = ?").bind(uid).run();
         
         if (result.changes === 0) {
@@ -1255,7 +1397,12 @@ export default {
                 return new Response('Authentication Required for this action', { status: 401, headers });
             }
             
-            // 价格管理 API (使用 UUID)
+            // NEW: 供应商账户注册 API
+            if (path === '/api/suppliers/register' && method === 'POST') {
+                return handleRegisterSupplier(request, env);
+            }
+            
+            // 价格管理 API
             if (path === '/api/prices' && method === 'POST') {
                 return handleUpdateSupplierPrice(request, env);
             }
