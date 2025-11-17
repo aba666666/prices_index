@@ -2,7 +2,7 @@
 import * as jwt from '@tsndr/cloudflare-worker-jwt';
 
 // --- 完整的内嵌前端 HTML/JS (已更新布局、访客逻辑、字段顺序和新增价格列) ---
-const FRONTEND_HTML = `
+const FRONTEND_HTML = ```
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -784,7 +784,7 @@ const FRONTEND_HTML = `
     </script>
 </body>
 </html>
-`; 
+```; 
 
 // --- Worker 后端逻辑 ---
 
