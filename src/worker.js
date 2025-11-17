@@ -323,7 +323,7 @@ const FRONTEND_HTML = `
             status.style.color = 'blue';
 
             try {
-                const response = await fetch(`${API_BASE_URL}/materials`), {
+                const response = await fetch(`${API_BASE_URL}/materials`, {
                     method: 'POST',
                     headers: getAuthHeaders(),
                     body: JSON.stringify(data)
@@ -621,7 +621,7 @@ const FRONTEND_HTML = `
             isReadOnly = false;
         }
 
-        // --- 7. 查询和渲染 (更新表格结构和逻辑) ---
+        // --- 7. 查询和渲染 (已修复语法错误) ---
 
         async function fetchMaterials() {
             const query = document.getElementById('search-query').value;
@@ -637,6 +637,7 @@ const FRONTEND_HTML = `
             }
 
             try {
+                // 修复了语法错误: 确保 fetch 的 options 参数在大括号 {} 内，且用逗号与 URL 分隔
                 const response = await fetch(`${API_BASE_URL}/materials?q=${encodeURIComponent(query)}`, {
                     headers: token ? { 'Authorization': 'Bearer ' + token } : {} 
                 });
@@ -734,7 +735,8 @@ const FRONTEND_HTML = `
                     const actionsCell = row.insertCell();
                     actionsCell.innerHTML = `
                         <button class="edit-btn" onclick='handleEdit(${cleanMat})'>编辑</button>
-                        <button class="delete-btn" onclick="handleDelete('${mat.UID}')">删除</button>`;
+                        <button class="delete-btn" onclick="handleDelete('${mat.UID}')">删除</button>
+                    `;
                     actionsCell.style.textAlign = 'center';
                 } else {
                     // 访客模式下，操作列不插入单元格，保持列数一致
@@ -920,9 +922,7 @@ async function handleSupplierPriceUpdate(request, env) {
         await stmt.run();
 
         // 2. 异步触发价格计算和同步
-        // 使用 ctx.waitUntil 来异步执行计算，不阻塞供应商的响应
-        // ⚠️ 注意：Worker 的 fetch 函数签名需要包含 ctx 才能使用 ctx.waitUntil
-        // 由于我们没有在 fetch 中传递 ctx，这里直接使用 await，这在高并发下可能导致响应延迟
+        // 使用 await 直接执行计算，这在高并发下可能导致响应延迟，但确保了价格实时性。
         await calculateAndSyncMaterialPrice(env, material_uid);
 
         return new Response(JSON.stringify({ 
@@ -983,8 +983,6 @@ async function handleMaterialPricesQuery(request, env) {
         return new Response(JSON.stringify({ message: `Query Failed: ${e.message}` }), { status: 500 });
     }
 }
-
-// ... (handleLogin, handleDirectUpload 保持不变)
 
 async function handleLogin(request, env) {
     if (!env.DB) {
