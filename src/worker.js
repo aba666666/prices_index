@@ -1,5 +1,14 @@
-// src/worker.js
+// src/worker.js - V3 增强版 (已集成供应商 UUID 绑定)
+
 import * as jwt from '@tsndr/cloudflare-worker-jwt';
+
+// --- 工具函数：UUID 生成器 (基于 RFC4122 V4) ---
+function uuidv4() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        var r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+}
 
 // --- 完整的内嵌前端 HTML/JS (已更新布局、访客逻辑和字段顺序) ---
 const FRONTEND_HTML = `
@@ -17,7 +26,6 @@ const FRONTEND_HTML = `
             color: #333;
         }
         h1 { color: #007bff; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
-        /* 增加了 #price-section */
         #query-section, #auth-section, #import-section, #manual-section, #price-section { 
             margin-bottom: 30px; 
             padding: 20px; 
@@ -73,7 +81,6 @@ const FRONTEND_HTML = `
             background-color: #e9ecef; 
             font-weight: bold;
         }
-        /* 优化图片样式，确保图片可点击 */
         .material-img { 
             max-width: 50px; 
             max-height: 50px; 
@@ -197,11 +204,11 @@ const FRONTEND_HTML = `
         </div>
         
         <div id="price-section" style="display:none;">
-            <h2>💰 供应商价格更新</h2>
+            <h2>💰 供应商价格更新 (需先编辑材料自动填充UID)</h2>
             <form id="price-form">
                 <div class="form-row">
                     <div class="form-group">
-                        <label for="p_material_uid">材料 UID *</label>
+                        <label for="p_material_uid">材料 UID * (编辑材料自动填充)</label>
                         <input type="text" id="p_material_uid" required placeholder="唯一识别码">
                     </div>
                     <div class="form-group">
@@ -247,7 +254,8 @@ const FRONTEND_HTML = `
                         <th style="width: 7%;">直径</th>
                         <th style="width: 7%;">颜色</th>
                         <th style="width: 10%;">唯一识别码(UID)</th>
-                        <th style="width: 8%;">最低采购价</th> <th style="width: 8%;">备注信息</th> 
+                        <th style="width: 8%;">最低采购价</th> 
+                        <th style="width: 8%;">备注信息</th> 
                         <th id="actions-header" style="width: 5%;">操作</th>
                     </tr>
                 </thead>
@@ -259,7 +267,6 @@ const FRONTEND_HTML = `
 
     <script>
         const API_BASE_URL = '/api'; 
-        // 字段列表，新增 unit
         const FIELD_NAMES = [
             "unified_name", "material_type", "sub_category", "model_number", 
             "unit", 
@@ -293,7 +300,7 @@ const FRONTEND_HTML = `
             isReadOnly = true;
             document.getElementById('manual-section').style.display = 'none';
             document.getElementById('import-section').style.display = 'none';
-            document.getElementById('price-section').style.display = 'none'; // NEW: 访客模式隐藏价格更新
+            document.getElementById('price-section').style.display = 'none'; 
             document.getElementById('logout-btn').style.display = 'none';
             document.getElementById('read-only-notice').style.display = 'block';
             document.getElementById('actions-header').style.display = 'none';
@@ -340,7 +347,6 @@ const FRONTEND_HTML = `
             status.style.color = 'blue';
 
             try {
-                // *** 这里的反引号是转义过的，确保在 Worker 模板字符串中正确传递给浏览器 ***
                 const response = await fetch(\`\${API_BASE_URL}/materials\`, {
                     method: 'POST',
                     headers: getAuthHeaders(),
@@ -414,12 +420,13 @@ const FRONTEND_HTML = `
             }
         }
         
-        // --- 3. 价格更新 (新增) ---
+        // --- 3. 价格更新 (已更新逻辑，后端使用 UUID 绑定) ---
         async function handlePriceUpdate() {
             if (isReadOnly) return alert('访客模式下禁止操作。');
             const token = localStorage.getItem('jwtToken');
             const status = document.getElementById('price-status');
             
+            // 注意：这里我们只传 company_name，UUID 在后端生成/查找
             const data = {
                 material_uid: document.getElementById('p_material_uid').value.trim(),
                 company_name: document.getElementById('p_company_name').value.trim(),
@@ -438,7 +445,6 @@ const FRONTEND_HTML = `
             status.style.color = 'blue';
 
             try {
-                // 正确的 fetch 调用，使用 API_BASE_URL 变量
                 const response = await fetch(\`\${API_BASE_URL}/prices\`, {
                     method: 'POST',
                     headers: getAuthHeaders(),
@@ -448,9 +454,9 @@ const FRONTEND_HTML = `
                 const result = await response.json();
 
                 if (response.ok && result.status === 'success') {
-                    status.textContent = \`UID: \${result.material_uid} 的价格在 \${result.company_name} 处更新成功！\`;
+                    status.textContent = \`UID: \${result.material_uid} 的价格在 \${result.company_name} (UUID: \${result.supplier_uuid}) 处更新成功！\`;
                     status.style.color = 'green';
-                    fetchMaterials(); // 重新查询以更新最低价
+                    fetchMaterials(); 
                 } else {
                     status.textContent = \`价格更新失败: \${result.message || response.statusText}\`;
                     status.style.color = 'red';
@@ -463,7 +469,7 @@ const FRONTEND_HTML = `
         }
         // --- END 价格更新 ---
 
-        // --- 4. 批量导入 (保持原有逻辑，新增 unit 字段解析) ---
+        // --- 4. 批量导入 (保持原有逻辑) ---
         
         function parseCSV(csvText) {
             
@@ -483,7 +489,6 @@ const FRONTEND_HTML = `
                 headers.forEach((header, index) => {
                     if (index < values.length) {
                         const key = header.toLowerCase().replace(/[^a-z0-9_]/g, ''); 
-                        // 匹配字段，允许 notes, unit
                         const matchedField = FIELD_NAMES.find(f => f.toLowerCase() === key || f.toLowerCase().includes(key));
                         if (matchedField) {
                              item[matchedField] = values[index].trim().replace(/['"]+/g, '');
@@ -491,7 +496,6 @@ const FRONTEND_HTML = `
                     }
                 });
 
-                // 兼容旧格式或简单CSV（按 FIELD_NAMES 顺序匹配）
                 if (Object.keys(item).length < 3) { 
                     item = {};
                     FIELD_NAMES.forEach((field, index) => {
@@ -606,12 +610,10 @@ const FRONTEND_HTML = `
 
         function handleEdit(material) {
             if (isReadOnly) return alert('访客模式下禁止操作。');
-            // 清空状态
             document.getElementById('manual-status').textContent = '正在编辑记录: ' + material.UID;
             document.getElementById('manual-status').style.color = '#17a2b8';
-            document.getElementById('f_UID').disabled = true; // 编辑时 UID 不可修改
+            document.getElementById('f_UID').disabled = true; 
             
-            // 填充表单
             FIELD_NAMES.forEach(name => {
                 const element = document.getElementById('f_' + name);
                 if (element && material[name] !== undefined) {
@@ -619,18 +621,17 @@ const FRONTEND_HTML = `
                 }
             });
             
-            // NEW: 填充 UID 到价格更新表单 
+            // 关键：填充 UID 到价格更新表单 
             if(document.getElementById('p_material_uid')) {
                  document.getElementById('p_material_uid').value = material.UID; 
             }
 
-            // 清空图片文件选择
             document.getElementById('f_image_file').value = '';
             window.scrollTo({ top: 0, behavior: 'smooth' });
         }
 
 
-        // --- 登录/退出/访客功能 (handleLogin新增显示价格section) ---
+        // --- 登录/退出/访客功能 ---
         async function handleLogin() {
             const username = document.getElementById('username').value;
             const password = document.getElementById('password').value;
@@ -656,7 +657,7 @@ const FRONTEND_HTML = `
                     document.getElementById('read-only-notice').style.display = 'none';
                     document.getElementById('manual-section').style.display = 'block';
                     document.getElementById('import-section').style.display = 'block';
-                    document.getElementById('price-section').style.display = 'block'; // NEW: 登录后显示价格更新
+                    document.getElementById('price-section').style.display = 'block'; 
                     document.getElementById('logout-btn').style.display = 'block';
                     document.getElementById('actions-header').style.display = 'table-cell'; 
 
@@ -695,13 +696,12 @@ const FRONTEND_HTML = `
             isReadOnly = false;
         }
 
-        // --- 查询和渲染 (更新表格结构和逻辑，新增最低价列) ---
+        // --- 查询和渲染 (更新表格结构和逻辑) ---
 
         async function fetchMaterials() {
             const query = document.getElementById('search-query').value;
             const token = localStorage.getItem('jwtToken'); 
             const body = document.getElementById('results-body');
-            // 调整列数：12 数据列 + 1 价格列 + 1 操作列 = 14 列 (浏览器渲染时只有 13 或 12 个 cell)
             const totalCols = isReadOnly ? 12 : 13; 
             body.innerHTML = \`<tr><td colspan="\${totalCols}" style="text-align: center;">正在查询...</td></tr>\`; 
             
@@ -747,7 +747,6 @@ const FRONTEND_HTML = `
                 const width = mat.width_mm;
                 const diameter = mat.diameter_mm;
                 
-                // 规格/尺寸显示逻辑
                 if (diameter && width) {
                     dimensions = \`高: \${width} mm\`; 
                 } else if (length && width) {
@@ -758,10 +757,8 @@ const FRONTEND_HTML = `
                     dimensions = \`\${width} mm\`;
                 }
                 
-                // 确保 material 对象可以安全地传递给 onclick
                 const safeMaterial = JSON.stringify(mat).replace(/'/g, "\\\\'"); 
                 
-                // 1. 图片单元格
                 const imgCell = row.insertCell();
                 if (mat.image_url) {
                     imgCell.innerHTML = \`<a href="\${mat.image_url}" target="_blank"><img src="\${mat.image_url}" class="material-img" alt="\${mat.unified_name}"></a>\`;
@@ -769,34 +766,16 @@ const FRONTEND_HTML = `
                     imgCell.textContent = '-';
                 }
                 
-                // 2. 统一名称
                 row.insertCell().textContent = mat.unified_name || '-';
-                
-                // 3. 材质 (大类)
                 row.insertCell().textContent = mat.material_type || '-';
-                
-                // 4. 小类
                 row.insertCell().textContent = mat.sub_category || '-';
-
-                // 5. 型号
                 row.insertCell().textContent = mat.model_number || '-';
-                
-                // 6. 单位 
                 row.insertCell().textContent = mat.unit || '-';
-                
-                // 7. 规格/尺寸
                 row.insertCell().textContent = dimensions || '-';
-                
-                // 8. 直径
                 row.insertCell().textContent = diameter ? \`Ø\${diameter} mm\` : '-';
-
-                // 9. 颜色
                 row.insertCell().textContent = mat.color || '-';
-                
-                // 10. 唯一识别码(UID) 
                 row.insertCell().textContent = mat.UID;
                 
-                // 11. 最低采购价 (新增列)
                 const priceCell = row.insertCell();
                 if (mat.lowest_price_per_unit) {
                      priceCell.innerHTML = \`\${mat.lowest_price_per_unit.toFixed(2)} <span style="font-size: 0.8em; color: #6c757d;">\${mat.price_currency || ''}</span>\`;
@@ -806,10 +785,8 @@ const FRONTEND_HTML = `
                      priceCell.textContent = 'N/A';
                 }
                 
-                // 12. 备注信息
                 row.insertCell().textContent = mat.notes || '-';
 
-                // 13. 操作 (只在管理员模式下显示)
                 if (!isReadOnly) {
                     const actionsCell = row.insertCell();
                     actionsCell.innerHTML = \`
@@ -818,7 +795,6 @@ const FRONTEND_HTML = `
                     \`;
                     actionsCell.style.textAlign = 'center';
                 } else {
-                    // 访客模式下，操作列不显示
                     row.insertCell().style.display = 'none'; 
                 }
             });
@@ -834,19 +810,15 @@ const FRONTEND_HTML = `
 
 // --- Worker 后端逻辑 ---
 
-//
 async function comparePassword(password, storedHash, env) {
-    // 假设您的 D1 数据库中存储的是 'testpass' 
     return password === storedHash;
 }
 
-//
 function getPublicImageUrl(r2_key, env) {
     if (!r2_key || !env.R2_PUBLIC_DOMAIN) return null;
     return `${env.R2_PUBLIC_DOMAIN}/${r2_key}`;
 }
 
-//
 async function authenticate(request, env) {
     const authHeader = request.headers.get('Authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -865,10 +837,8 @@ async function authenticate(request, env) {
     }
 }
 
-//
 const ADMIN_ACTIONS = ['POST', 'PUT', 'DELETE'];
 
-//
 function isReadOnlyRequest(method, path) {
     if (method === 'GET') {
         return true; 
@@ -879,7 +849,6 @@ function isReadOnlyRequest(method, path) {
     return true; 
 }
 
-//
 async function handleLogin(request, env) {
     if (!env.DB) {
         const { username, password } = await request.json();
@@ -930,8 +899,6 @@ async function handleLogin(request, env) {
     }
 }
 
-
-//
 async function handleDirectUpload(request, env) {
     const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
 
@@ -976,7 +943,6 @@ async function handleDirectUpload(request, env) {
     }
 }
 
-//
 async function handleCreateUpdateMaterial(request, env) {
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
@@ -989,7 +955,6 @@ async function handleCreateUpdateMaterial(request, env) {
     }
 
     try {
-        //
         const stmt = env.DB.prepare(`
             INSERT OR REPLACE INTO materials 
             (UID, unified_name, material_type, sub_category, model_number, length_mm, width_mm, diameter_mm, color, notes, alias, r2_image_key, unit)
@@ -1001,7 +966,7 @@ async function handleCreateUpdateMaterial(request, env) {
             mat.notes || null, 
             mat.alias,
             mat.r2_image_key || null,
-            mat.unit || null // unit 字段绑定
+            mat.unit || null 
         );
 
         await stmt.run();
@@ -1016,7 +981,7 @@ async function handleCreateUpdateMaterial(request, env) {
     }
 }
 
-// --- NEW: 供应商价格更新 API 处理器 ---
+// --- UPDATED: 供应商价格更新 API 处理器 (使用 UUID) ---
 
 async function handleUpdateSupplierPrice(request, env) {
     if (!env.DB) {
@@ -1031,41 +996,41 @@ async function handleUpdateSupplierPrice(request, env) {
     }
 
     try {
-        // 1. 查找或创建供应商
-        let supplierId;
+        // 1. 查找或创建供应商 (使用 company_name 查找，但存储/绑定使用 UUID)
+        let supplier_uuid;
         const { results: existingSuppliers } = await env.DB.prepare(
-            "SELECT id FROM suppliers WHERE company_name = ?"
+            "SELECT supplier_uuid FROM suppliers WHERE company_name = ?"
         ).bind(company_name).all();
 
         if (existingSuppliers.length > 0) {
-            supplierId = existingSuppliers[0].id;
+            supplier_uuid = existingSuppliers[0].supplier_uuid;
         } else {
-            // 插入新供应商并获取其 ID
+            // 2. 供应商不存在，生成新的 UUID 并创建记录
+            supplier_uuid = uuidv4(); // 使用新的 UUID 生成函数
+            
             await env.DB.prepare(
-                "INSERT OR IGNORE INTO suppliers (company_name) VALUES (?)"
-            ).bind(company_name).run();
-            
-            // 重新查询 ID，确保获取到正确的 ID
-            const { results: newIdResult } = await env.DB.prepare("SELECT id FROM suppliers WHERE company_name = ?").bind(company_name).all();
-            supplierId = newIdResult[0]?.id;
-            
-            if (!supplierId) {
-                return new Response(JSON.stringify({ message: 'Failed to find/create supplier ID.' }), { status: 500 });
-            }
+                "INSERT INTO suppliers (supplier_uuid, company_name) VALUES (?, ?)"
+            ).bind(supplier_uuid, company_name).run();
         }
 
-        // 2. 插入或更新价格
+        // 3. 插入或更新价格 (使用 material_uid 和 supplier_uuid 进行联合绑定)
         await env.DB.prepare(`
-            INSERT INTO prices (material_uid, supplier_id, price_per_unit, currency, last_updated)
+            INSERT INTO prices (material_uid, supplier_uuid, price_per_unit, currency, last_updated)
             VALUES (?, ?, ?, ?, datetime('now'))
-            ON CONFLICT(material_uid, supplier_id) DO UPDATE SET
+            ON CONFLICT(material_uid, supplier_uuid) DO UPDATE SET
                 price_per_unit = excluded.price_per_unit,
                 currency = excluded.currency,
                 last_updated = excluded.last_updated
-        `).bind(material_uid, supplierId, price_per_unit, currency).run();
+        `).bind(material_uid, supplier_uuid, price_per_unit, currency).run();
 
 
-        return new Response(JSON.stringify({ status: 'success', message: 'Price updated successfully.', material_uid, company_name }), {
+        return new Response(JSON.stringify({ 
+            status: 'success', 
+            message: 'Price updated successfully.', 
+            material_uid, 
+            company_name, 
+            supplier_uuid 
+        }), {
             headers: { 'Content-Type': 'application/json' }
         });
 
@@ -1074,12 +1039,10 @@ async function handleUpdateSupplierPrice(request, env) {
         return new Response(JSON.stringify({ message: `Price Update Failed: ${e.message}` }), { status: 500 });
     }
 }
-// --- END NEW ---
+// --- END UPDATED ---
 
 
-//
 async function handleQueryMaterials(request, env) {
-    // 原始查询逻辑被修改，以增加最低价格的 sub-query
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
@@ -1089,7 +1052,7 @@ async function handleQueryMaterials(request, env) {
         
         let stmt;
         
-        // 增加 sub-query 以实时计算最低采购价
+        // 查询语句修改：prices 表现在使用 supplier_uuid 而非 supplier_id 绑定
         const baseQuery = `
             SELECT 
                 m.*,
@@ -1105,7 +1068,6 @@ async function handleQueryMaterials(request, env) {
 
         if (query) {
             const searchPattern = `%${query}%`;
-            // WHERE 子句增加 unit 字段
             stmt = env.DB.prepare(`
                 ${baseQuery}
                 WHERE m.UID LIKE ? OR m.unified_name LIKE ? 
@@ -1113,7 +1075,6 @@ async function handleQueryMaterials(request, env) {
                 LIMIT 100
             `).bind(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern); 
         } else {
-            // 原始查询: SELECT * FROM materials LIMIT 100 被替换
             stmt = env.DB.prepare(`${baseQuery} LIMIT 100`);
         }
         
@@ -1129,11 +1090,10 @@ async function handleQueryMaterials(request, env) {
             }
             
             return {
-                // ...mat 包含所有字段，包括 image_url: getPublicImageUrl(mat.r2_image_key, env) 
                 ...mat,
                 image_url: getPublicImageUrl(mat.r2_image_key, env),
-                lowest_price_per_unit: lowest_price_per_unit, // 新增：最低价格
-                price_currency: currency // 新增：价格单位
+                lowest_price_per_unit: lowest_price_per_unit, 
+                price_currency: currency 
             }
         });
 
@@ -1148,7 +1108,6 @@ async function handleQueryMaterials(request, env) {
 }
 
 
-//
 async function handleImportMaterials(request, env) {
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
@@ -1173,7 +1132,6 @@ async function handleImportMaterials(request, env) {
                 errorMessages.push(`Missing UID for material: ${mat.unified_name || 'unknown'}`);
                 return null;
             }
-            // 更新 SQL 语句以包含 unit 字段
             return env.DB.prepare(`
                 INSERT OR REPLACE INTO materials 
                 (UID, unified_name, material_type, sub_category, model_number, length_mm, width_mm, diameter_mm, color, notes, alias, r2_image_key, unit)
@@ -1187,7 +1145,7 @@ async function handleImportMaterials(request, env) {
                 mat.notes || null,
                 mat.alias,
                 mat.r2_image_key || null,
-                mat.unit || null // unit 字段绑定
+                mat.unit || null 
             );
         }).filter(stmt => stmt !== null);
         
@@ -1214,7 +1172,6 @@ async function handleImportMaterials(request, env) {
     }
 }
 
-//
 async function handleDeleteMaterial(request, env) {
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
@@ -1247,10 +1204,9 @@ async function handleDeleteMaterial(request, env) {
 }
 
 
-// --- 主要 Worker 入口 (新增 /api/prices 路由) ---
+// --- 主要 Worker 入口 ---
 
 export default {
-    //
     async fetch(request, env, ctx) {
         const url = new URL(request.url);
         const path = url.pathname;
@@ -1277,14 +1233,13 @@ export default {
         
         if (path.startsWith('/api/')) {
             
-            // 访客/非鉴权用户允许的 GET 查询 (已包含价格查询逻辑)
             if (isReadOnlyRequest(method, path)) {
                 if (path === '/api/materials' && method === 'GET') {
                     return handleQueryMaterials(request, env);
                 }
             }
 
-            const authResult = await authenticate(request, env); //
+            const authResult = await authenticate(request, env); 
             if (!authResult.authorized) {
                 if (method === 'GET') {
                     return new Response('Not Found or Unauthorized', { status: 404, headers });
@@ -1292,28 +1247,28 @@ export default {
                 return new Response('Authentication Required for this action', { status: 401, headers });
             }
             
-            // NEW: 价格管理 API (需要鉴权)
+            // 价格管理 API (使用 UUID)
             if (path === '/api/prices' && method === 'POST') {
                 return handleUpdateSupplierPrice(request, env);
             }
             
             if (path.startsWith('/api/materials/') && method === 'DELETE') {
-                return handleDeleteMaterial(request, env); //
+                return handleDeleteMaterial(request, env); 
             }
 
             if (path === '/api/materials' && method === 'POST') {
-                 return handleCreateUpdateMaterial(request, env); //
+                 return handleCreateUpdateMaterial(request, env); 
             }
             
             if (path === '/api/upload' && method === 'POST') {
-                return handleDirectUpload(request, env); //
+                return handleDirectUpload(request, env); 
             }
 
             if (path === '/api/import' && method === 'POST') {
-                return handleImportMaterials(request, env); //
+                return handleImportMaterials(request, env); 
             }
         }
 
-        return new Response('Not Found', { status: 404 }); //
+        return new Response('Not Found', { status: 404 }); 
     }
 };
