@@ -1,4 +1,4 @@
-// src/worker.js - V5 稳定版 (整合价格查询、供应商更新及账户注册)
+// src/worker.js - V6 稳定版 (权限隔离与供应商视图)
 
 import * as jwt from '@tsndr/cloudflare-worker-jwt';
 
@@ -20,7 +20,7 @@ function generateRandomPassword(length = 8) {
     return password;
 }
 
-// --- 完整的内嵌前端 HTML/JS (已更新布局、访客逻辑和字段顺序) ---
+// --- 完整的内嵌前端 HTML/JS (已更新权限逻辑) ---
 const FRONTEND_HTML = `
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -36,7 +36,7 @@ const FRONTEND_HTML = `
             color: #333;
         }
         h1 { color: #007bff; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
-        #query-section, #auth-section, #import-section, #manual-section, #price-section, #supplier-section { 
+        #query-section, #auth-section, #import-section, #manual-section, #price-section, #supplier-register-section { 
             margin-bottom: 30px; 
             padding: 20px; 
             background-color: #fff;
@@ -114,6 +114,13 @@ const FRONTEND_HTML = `
             border-left: 5px solid #ffc107;
             font-weight: bold;
         }
+        .supplier-mode {
+            background-color: #e6f7ff; 
+            padding: 10px;
+            margin-bottom: 20px;
+            border-left: 5px solid #007bff;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
@@ -123,7 +130,8 @@ const FRONTEND_HTML = `
         <h2>🔑 用户登录</h2>
         <input type="text" id="username" value="test" placeholder="用户名">
         <input type="password" id="password" value="testpass" placeholder="密码">
-        <button onclick="handleLogin()">登录</button>
+        <button onclick="handleLogin('admin')">管理员登录</button>
+        <button onclick="handleLogin('supplier')" style="background-color: #007bff;">供应商登录</button>
         <button onclick="handleViewAsGuest()">以访客身份查看 (只读)</button>
         <p id="login-status" style="color: red;"></p>
     </div>
@@ -135,10 +143,14 @@ const FRONTEND_HTML = `
             您当前处于访客模式（只读）。所有编辑、删除、上传和导入功能已被禁用。
             <button onclick="handleLogout()" style="background-color: #007bff; margin-left: 20px;">返回登录</button>
         </div>
-        <button onclick="handleLogout()" id="logout-btn" style="float: right; background-color: #dc3545;">退出登录</button>
+        <div id="supplier-notice" class="supplier-mode" style="display:none;">
+            您当前处于**供应商模式** (<span id="supplier-name-display"></span>)。您只能查看并更新您公司提供的材料价格。
+            <button onclick="handleLogout()" style="background-color: #dc3545; margin-left: 20px;">退出登录</button>
+        </div>
+        <button onclick="handleLogout()" id="logout-btn" style="float: right; background-color: #dc3545; display: none;">退出登录</button>
         
-        <div id="supplier-section">
-            <h2>👤 供应商账户注册</h2>
+        <div id="supplier-register-section" style="display:none;">
+            <h2>👤 供应商账户创建 (管理员专用)</h2>
             <form id="supplier-form">
                 <div class="form-row">
                     <div class="form-group">
@@ -150,69 +162,31 @@ const FRONTEND_HTML = `
                         <input type="text" id="s_username" required placeholder="例如: yguang123">
                     </div>
                 </div>
-                <button type="button" onclick="handleSupplierRegister()" id="supplier-register-btn">注册新供应商账户</button>
+                <button type="button" onclick="handleSupplierRegister()" id="supplier-register-btn">创建供应商账户</button>
                 <p id="supplier-status" style="color: blue;"></p>
             </form>
         </div>
-        
-        <div id="manual-section">
+        <div id="manual-section" style="display:none;">
             <h2>📝 手动创建 / 编辑记录 <button onclick="resetManualForm()" style="background-color: #17a2b8;">清空表单</button></h2>
             <form id="material-form">
                 <div class="form-row">
-                    <div class="form-group">
-                        <label for="f_unified_name">统一名称 *</label>
-                        <input type="text" id="f_unified_name" name="unified_name" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="f_material_type">材质 (大类)</label>
-                        <input type="text" id="f_material_type" name="material_type">
-                    </div>
-                    <div class="form-group">
-                        <label for="f_sub_category">小类</label>
-                        <input type="text" id="f_sub_category" name="sub_category">
-                    </div>
-                    <div class="form-group">
-                        <label for="f_model_number">型号</label>
-                        <input type="text" id="f_model_number" name="model_number">
-                    </div>
+                    <div class="form-group"><label for="f_unified_name">统一名称 *</label><input type="text" id="f_unified_name" name="unified_name" required></div>
+                    <div class="form-group"><label for="f_material_type">材质 (大类)</label><input type="text" id="f_material_type" name="material_type"></div>
+                    <div class="form-group"><label for="f_sub_category">小类</label><input type="text" id="f_sub_category" name="sub_category"></div>
+                    <div class="form-group"><label for="f_model_number">型号</label><input type="text" id="f_model_number" name="model_number"></div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group"><label for="f_unit">单位</label><input type="text" id="f_unit" name="unit" placeholder="例如: 块, 个, 套, 米"></div>
+                    <div class="form-group"><label for="f_length_mm">长度 (mm)</label><input type="number" step="0.01" id="f_length_mm" name="length_mm"></div>
+                    <div class="form-group"><label for="f_width_mm">宽度/高度 (mm)</label><input type="number" step="0.01" id="f_width_mm" name="width_mm"></div>
+                    <div class="form-group"><label for="f_diameter_mm">直径 (mm)</label><input type="number" step="0.01" id="f_diameter_mm" name="diameter_mm"></div>
                 </div>
                 
                 <div class="form-row">
-                    <div class="form-group">
-                        <label for="f_unit">单位</label>
-                        <input type="text" id="f_unit" name="unit" placeholder="例如: 块, 个, 套, 米">
-                    </div>
-                    <div class="form-group">
-                        <label for="f_length_mm">长度 (mm)</label>
-                        <input type="number" step="0.01" id="f_length_mm" name="length_mm">
-                    </div>
-                    <div class="form-group">
-                        <label for="f_width_mm">宽度/高度 (mm)</label> 
-                        <input type="number" step="0.01" id="f_width_mm" name="width_mm">
-                    </div>
-                    <div class="form-group">
-                        <label for="f_diameter_mm">直径 (mm)</label>
-                        <input type="number" step="0.01" id="f_diameter_mm" name="diameter_mm">
-                    </div>
-                </div>
-                
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="f_UID">唯一识别码 (UID) *</label>
-                        <input type="text" id="f_UID" name="UID" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="f_notes">备注信息</label>
-                        <textarea id="f_notes" name="notes" rows="1" placeholder="例如：采购信息、使用说明等"></textarea>
-                    </div>
-                     <div class="form-group">
-                        <label for="f_color">颜色</label>
-                        <input type="text" id="f_color" name="color">
-                    </div>
-                    <div class="form-group">
-                        <label for="f_alias">别名</label>
-                        <input type="text" id="f_alias" name="alias">
-                    </div>
+                    <div class="form-group"><label for="f_UID">唯一识别码 (UID) *</label><input type="text" id="f_UID" name="UID" required></div>
+                    <div class="form-group"><label for="f_notes">备注信息</label><textarea id="f_notes" name="notes" rows="1" placeholder="例如：采购信息、使用说明等"></textarea></div>
+                     <div class="form-group"><label for="f_color">颜色</label><input type="text" id="f_color" name="color"></div>
+                    <div class="form-group"><label for="f_alias">别名</label><input type="text" id="f_alias" name="alias"></div>
                 </div>
 
                 <div class="form-row">
@@ -230,7 +204,6 @@ const FRONTEND_HTML = `
                 <p id="manual-status" style="color: blue;"></p>
             </form>
         </div>
-        
         <div id="price-section" style="display:none;">
             <h2>💰 供应商价格更新 (需先编辑材料自动填充UID)</h2>
             <form id="price-form">
@@ -239,8 +212,8 @@ const FRONTEND_HTML = `
                         <label for="p_material_uid">材料 UID * (编辑材料自动填充)</label>
                         <input type="text" id="p_material_uid" required placeholder="唯一识别码">
                     </div>
-                    <div class="form-group">
-                        <label for="p_company_name">供应商公司名称 *</label>
+                    <div class="form-group" id="p_company_name_group">
+                        <label for="p_company_name">供应商公司名称 * (供应商模式下自动填充)</label>
                         <input type="text" id="p_company_name" required placeholder="例如: 阳光文具厂">
                     </div>
                     <div class="form-group">
@@ -257,13 +230,12 @@ const FRONTEND_HTML = `
                 <p id="price-status" style="color: blue;"></p>
             </form>
         </div>
-        <div id="import-section">
+        <div id="import-section" style="display:none;">
             <h2>📤 批量导入 (支持 CSV / JSON)</h2>
             <input type="file" id="import-file" accept=".json, .csv">
             <button onclick="handleBulkImport()" id="import-btn">解析并导入数据</button>
             <p id="import-status" style="color: blue;"></p>
         </div>
-
         <div id="query-section">
             <h2>🔍 材料查询与管理</h2>
             <input type="text" id="search-query" placeholder="输入名称、型号、UID或单位进行查询" style="width: 400px;">
@@ -301,20 +273,32 @@ const FRONTEND_HTML = `
             "length_mm", "width_mm", "diameter_mm", "color", 
             "UID", "notes", "alias", "r2_image_key"
         ];
-        let isReadOnly = false;
+        let authState = {
+            role: null, // 'admin', 'supplier', or 'guest'
+            supplierUUID: null,
+            supplierCompanyName: null,
+            isReadOnly: false,
+        };
 
         window.onload = function() {
             const token = localStorage.getItem('jwtToken');
+            const role = localStorage.getItem('role');
             const guest = localStorage.getItem('isGuest');
 
             if (token) {
-                isReadOnly = false;
+                authState.role = role;
+                authState.isReadOnly = (role === 'guest');
+                authState.supplierUUID = localStorage.getItem('supplierUUID');
+                authState.supplierCompanyName = localStorage.getItem('supplierCompanyName');
+                
                 showMainSection();
+                updateUIAccordingToRole();
                 fetchMaterials(); 
             } else if (guest === 'true') {
-                isReadOnly = true;
+                authState.role = 'guest';
+                authState.isReadOnly = true;
                 showMainSection();
-                setReadOnlyMode();
+                updateUIAccordingToRole();
                 fetchMaterials();
             }
         };
@@ -323,17 +307,51 @@ const FRONTEND_HTML = `
             document.getElementById('auth-section').style.display = 'none';
             document.getElementById('main-section').style.display = 'block';
         }
-
-        function setReadOnlyMode() {
-            isReadOnly = true;
+        
+        function updateUIAccordingToRole() {
+            const isGuest = authState.role === 'guest';
+            const isAdmin = authState.role === 'admin';
+            const isSupplier = authState.role === 'supplier';
+            
+            // 默认隐藏所有管理/供应商模块
+            document.getElementById('read-only-notice').style.display = 'none';
+            document.getElementById('supplier-notice').style.display = 'none';
             document.getElementById('manual-section').style.display = 'none';
             document.getElementById('import-section').style.display = 'none';
-            document.getElementById('price-section').style.display = 'none'; 
-            document.getElementById('supplier-section').style.display = 'none'; // 禁用供应商注册
+            document.getElementById('supplier-register-section').style.display = 'none';
+            document.getElementById('price-section').style.display = 'none';
             document.getElementById('logout-btn').style.display = 'none';
-            document.getElementById('read-only-notice').style.display = 'block';
-            document.getElementById('actions-header').style.display = 'none';
+            
+            const actionsHeader = document.getElementById('actions-header');
+            if (actionsHeader) actionsHeader.style.display = isAdmin ? 'table-cell' : 'none';
+            
+            if (isGuest) {
+                document.getElementById('read-only-notice').style.display = 'block';
+                return;
+            }
+            
+            if (isAdmin) {
+                document.getElementById('logout-btn').style.display = 'block';
+                document.getElementById('manual-section').style.display = 'block';
+                document.getElementById('import-section').style.display = 'block';
+                document.getElementById('supplier-register-section').style.display = 'block';
+                document.getElementById('price-section').style.display = 'block';
+                // 管理员模式下，供应商名称是可编辑的
+                document.getElementById('p_company_name_group').style.display = 'block';
+            }
+            
+            if (isSupplier) {
+                document.getElementById('supplier-notice').style.display = 'block';
+                document.getElementById('supplier-name-display').textContent = authState.supplierCompanyName || '未知供应商';
+                document.getElementById('price-section').style.display = 'block';
+                // 供应商模式下，供应商名称字段被禁用，且自动填充
+                const companyNameInput = document.getElementById('p_company_name');
+                companyNameInput.value = authState.supplierCompanyName;
+                companyNameInput.disabled = true;
+                document.getElementById('p_company_name_group').style.display = 'block';
+            }
         }
+
 
         // --- 核心 CRUD & Upload 逻辑 ---
 
@@ -362,11 +380,12 @@ const FRONTEND_HTML = `
         }
 
         async function handleSave() {
-            if (isReadOnly) return alert('访客模式下禁止操作。');
+            if (authState.role !== 'admin') return alert('只有管理员才能编辑材料基础信息。');
             const token = localStorage.getItem('jwtToken');
             const status = document.getElementById('manual-status');
             const data = getFormData();
             
+            // ... (保持 V5 的保存逻辑不变)
             if (!token) { status.textContent = '请先登录。'; status.style.color = 'red'; return; }
             if (!data.UID || !data.unified_name) {
                 status.textContent = 'UID 和 统一名称 不能为空。'; status.style.color = 'red'; return;
@@ -397,12 +416,14 @@ const FRONTEND_HTML = `
                 status.textContent = '网络错误，保存失败: ' + error.message;
                 status.style.color = 'red';
             }
+            // ... (保持 V5 的保存逻辑不变)
         }
 
         // --- 2. 图片上传 ---
 
         async function handleImageUpload() {
-            if (isReadOnly) return alert('访客模式下禁止操作。');
+            if (authState.role !== 'admin') return alert('只有管理员才能上传图片。');
+            // ... (保持 V5 的上传逻辑不变)
             const fileInput = document.getElementById('f_image_file');
             const keyInput = document.getElementById('f_r2_image_key');
             const status = document.getElementById('manual-status');
@@ -449,15 +470,18 @@ const FRONTEND_HTML = `
             }
         }
         
-        // --- 3. 价格更新 ---
+        // --- 3. 价格更新 (供应商和管理员共用) ---
         async function handlePriceUpdate() {
-            if (isReadOnly) return alert('访客模式下禁止操作。');
+            if (authState.role === 'guest') return alert('访客模式下禁止操作。');
             const token = localStorage.getItem('jwtToken');
             const status = document.getElementById('price-status');
             
+            // 供应商模式下，公司名称从本地状态获取
+            const companyName = authState.role === 'supplier' ? authState.supplierCompanyName : document.getElementById('p_company_name').value.trim();
+            
             const data = {
                 material_uid: document.getElementById('p_material_uid').value.trim(),
-                company_name: document.getElementById('p_company_name').value.trim(),
+                company_name: companyName,
                 price_per_unit: parseFloat(document.getElementById('p_price_per_unit').value),
                 currency: document.getElementById('p_currency').value.trim() || 'RMB'
             };
@@ -482,7 +506,7 @@ const FRONTEND_HTML = `
                 const result = await response.json();
 
                 if (response.ok && result.status === 'success') {
-                    status.textContent = \`UID: \${result.material_uid} 的价格在 \${result.company_name} (UUID: \${result.supplier_uuid}) 处更新成功！\`;
+                    status.textContent = \`UID: \${result.material_uid} 的价格在 \${result.company_name || data.company_name} 处更新成功！\`;
                     status.style.color = 'green';
                     fetchMaterials(); 
                 } else {
@@ -495,11 +519,10 @@ const FRONTEND_HTML = `
                 status.style.color = 'red';
             }
         }
-        // --- END 价格更新 ---
         
-        // --- 4. 供应商注册 ---
+        // --- 4. 供应商账户注册 (管理员专用) ---
         async function handleSupplierRegister() {
-            if (isReadOnly) return alert('访客模式下禁止操作。');
+            if (authState.role !== 'admin') return alert('只有管理员才能创建供应商账户。');
             const token = localStorage.getItem('jwtToken');
             const status = document.getElementById('supplier-status');
             
@@ -515,11 +538,11 @@ const FRONTEND_HTML = `
                 return;
             }
 
-            status.textContent = '正在注册供应商账户...';
+            status.textContent = '正在创建供应商账户...';
             status.style.color = 'blue';
 
             try {
-                const response = await fetch(\`\${API_BASE_URL}/suppliers/register\`, {
+                const response = await fetch(\`\${API_BASE_URL}/suppliers/create\`, {
                     method: 'POST',
                     headers: getAuthHeaders(),
                     body: JSON.stringify(data)
@@ -529,26 +552,27 @@ const FRONTEND_HTML = `
 
                 if (response.ok && result.status === 'success') {
                     status.innerHTML = \`
-                        <span style="color: green;">账户注册成功！请记录以下信息：</span>
+                        <span style="color: green;">账户创建成功！请告知供应商以下信息，并要求其首次登录后修改密码：</span>
                         <br><strong>公司 UUID (Supplier ID):</strong> \${result.supplier_uuid}
                         <br><strong>登录名 (Username):</strong> \${result.username}
                         <br><strong>临时密码 (Password):</strong> <span style="color: red;">\${result.password}</span>
                     \`;
                 } else {
-                    status.textContent = \`账户注册失败: \${result.message || response.statusText}\`;
+                    status.textContent = \`账户创建失败: \${result.message || response.statusText}\`;
                     status.style.color = 'red';
                 }
 
             } catch (error) {
-                status.textContent = '网络错误，账户注册失败: ' + error.message;
+                status.textContent = '网络错误，账户创建失败: ' + error.message;
                 status.style.color = 'red';
             }
         }
         // --- END 供应商注册 ---
 
 
-        // --- 5. 批量导入 (保持原有逻辑) ---
+        // --- 5. 批量导入 (管理员专用) ---
         
+        // ... (parseCSV 函数保持不变) ...
         function parseCSV(csvText) {
             
             const lines = csvText.trim().split(/\\r?\\n/); 
@@ -592,8 +616,10 @@ const FRONTEND_HTML = `
             return data;
         }
 
+
         async function handleBulkImport() {
-            if (isReadOnly) return alert('访客模式下禁止操作。');
+            if (authState.role !== 'admin') return alert('只有管理员才能批量导入。');
+            // ... (保持 V5 的导入逻辑不变) ...
             const fileInput = document.getElementById('import-file');
             const status = document.getElementById('import-status');
             const token = localStorage.getItem('jwtToken');
@@ -650,10 +676,11 @@ const FRONTEND_HTML = `
             reader.readAsText(file);
         }
 
-        // --- 6. 删除 ---
+        // --- 6. 删除 (管理员专用) ---
         
         async function handleDelete(uid) {
-            if (isReadOnly) return alert('访客模式下禁止操作。');
+            if (authState.role !== 'admin') return alert('只有管理员才能删除材料记录。');
+            // ... (保持 V5 的删除逻辑不变) ...
             if (!confirm('确定要删除 UID 为 ' + uid + ' 的材料记录吗？\\n此操作不可逆！')) return;
             
             const token = localStorage.getItem('jwtToken');
@@ -679,7 +706,7 @@ const FRONTEND_HTML = `
         // --- 7. 表单/UI 辅助功能 (handleEdit新增填充价格UID) ---
         
         function resetManualForm() {
-            if (isReadOnly) return alert('访客模式下禁止操作。');
+            if (authState.role !== 'admin') return alert('只有管理员才能操作此表单。');
             document.getElementById('material-form').reset();
             document.getElementById('manual-status').textContent = '表单已清空。';
             document.getElementById('manual-status').style.color = 'blue';
@@ -687,7 +714,22 @@ const FRONTEND_HTML = `
         }
 
         function handleEdit(material) {
-            if (isReadOnly) return alert('访客模式下禁止操作。');
+            if (authState.role === 'guest') return alert('访客模式下禁止操作。');
+            
+            // 供应商只能更新价格，不应填充其他表单
+            if (authState.role === 'supplier') {
+                document.getElementById('price-status').textContent = '请在下方价格更新模块填写信息。';
+                document.getElementById('price-status').style.color = '#17a2b8';
+                
+                // 仅填充价格更新所需的 UID 字段
+                if(document.getElementById('p_material_uid')) {
+                     document.getElementById('p_material_uid').value = material.UID; 
+                }
+                window.scrollTo({ top: document.getElementById('price-section').offsetTop, behavior: 'smooth' });
+                return;
+            }
+            
+            // 管理员模式：填充材料信息表单
             document.getElementById('manual-status').textContent = '正在编辑记录: ' + material.UID;
             document.getElementById('manual-status').style.color = '#17a2b8';
             document.getElementById('f_UID').disabled = true; 
@@ -699,7 +741,7 @@ const FRONTEND_HTML = `
                 }
             });
             
-            // 关键：填充 UID 到价格更新表单 
+            // 填充 UID 到价格更新表单 
             if(document.getElementById('p_material_uid')) {
                  document.getElementById('p_material_uid').value = material.UID; 
             }
@@ -709,37 +751,51 @@ const FRONTEND_HTML = `
         }
 
 
-        // --- 登录/退出/访客功能 ---
-        async function handleLogin() {
+        // --- 登录/退出/访客功能 (重要更新：角色判断) ---
+        async function handleLogin(role) {
             const username = document.getElementById('username').value;
             const password = document.getElementById('password').value;
             const status = document.getElementById('login-status');
-            status.textContent = '正在登录...';
+            status.textContent = \`正在以 \${role === 'admin' ? '管理员' : '供应商'} 身份登录...\`;
             status.style.color = 'blue';
 
             try {
                 const response = await fetch(\`\${API_BASE_URL}/login\`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, password })
+                    body: JSON.stringify({ username, password, role })
                 });
 
                 if (response.ok) {
                     const data = await response.json();
+                    
+                    if (data.status === 'reset_required') {
+                        status.innerHTML = \`<span style="color: red;">登录失败：您的账户使用的是临时密码。请联系管理员重置，或访问 <a href="/reset-password">密码重置链接</a>。</span>\`;
+                        return;
+                    }
+                    
                     localStorage.setItem('jwtToken', data.token);
+                    localStorage.setItem('role', data.role);
                     localStorage.removeItem('isGuest'); 
-                    status.textContent = '登录成功！(管理员模式)';
+                    
+                    if (data.role === 'supplier') {
+                        localStorage.setItem('supplierUUID', data.supplier_uuid);
+                        localStorage.setItem('supplierCompanyName', data.supplier_company_name);
+                        authState.supplierUUID = data.supplier_uuid;
+                        authState.supplierCompanyName = data.supplier_company_name;
+                    } else {
+                        localStorage.removeItem('supplierUUID');
+                        localStorage.removeItem('supplierCompanyName');
+                        authState.supplierUUID = null;
+                        authState.supplierCompanyName = null;
+                    }
+                    
+                    status.textContent = \`登录成功！(\${data.role === 'admin' ? '管理员' : '供应商'} 模式)\`;
                     status.style.color = 'green';
                     
-                    isReadOnly = false;
-                    document.getElementById('read-only-notice').style.display = 'none';
-                    document.getElementById('manual-section').style.display = 'block';
-                    document.getElementById('import-section').style.display = 'block';
-                    document.getElementById('price-section').style.display = 'block'; 
-                    document.getElementById('supplier-section').style.display = 'block'; 
-                    document.getElementById('logout-btn').style.display = 'block';
-                    document.getElementById('actions-header').style.display = 'table-cell'; 
-
+                    authState.role = data.role;
+                    authState.isReadOnly = false;
+                    updateUIAccordingToRole();
                     showMainSection();
                     fetchMaterials();
                 } else {
@@ -755,49 +811,61 @@ const FRONTEND_HTML = `
         function handleViewAsGuest() {
             localStorage.removeItem('jwtToken');
             localStorage.setItem('isGuest', 'true');
+            localStorage.removeItem('role');
+            
             document.getElementById('login-status').textContent = '已进入访客模式。';
             document.getElementById('login-status').style.color = '#007bff';
             
-            isReadOnly = true;
+            authState.role = 'guest';
+            authState.isReadOnly = true;
             showMainSection();
-            setReadOnlyMode();
+            updateUIAccordingToRole();
             fetchMaterials();
         }
 
         function handleLogout() {
-            localStorage.removeItem('jwtToken');
-            localStorage.removeItem('isGuest');
+            localStorage.clear(); 
             
             document.getElementById('main-section').style.display = 'none';
             document.getElementById('auth-section').style.display = 'block';
             document.getElementById('login-status').textContent = '已退出登录。';
             document.getElementById('login-status').style.color = 'green';
-            isReadOnly = false;
+            
+            authState = { role: null, supplierUUID: null, isReadOnly: false };
         }
 
-        // --- 查询和渲染 (更新表格结构和逻辑) ---
+        // --- 查询和渲染 (更新：根据角色传递UUID) ---
 
         async function fetchMaterials() {
             const query = document.getElementById('search-query').value;
             const token = localStorage.getItem('jwtToken'); 
             const body = document.getElementById('results-body');
-            // 调整列数 (13列)
-            const totalCols = isReadOnly ? 12 : 13; 
+            
+            let queryString = \`q=\${encodeURIComponent(query)}\`;
+            
+            // 关键：如果是供应商，传递其UUID，让后端只返回相关记录
+            if (authState.role === 'supplier' && authState.supplierUUID) {
+                queryString += \`&supplier_uuid=\${authState.supplierUUID}\`;
+            }
+            
+            const isActionsVisible = authState.role === 'admin';
+            const totalCols = isActionsVisible ? 13 : 12; // 如果是供应商/访客，隐藏操作列
+
             body.innerHTML = \`<tr><td colspan="\${totalCols}" style="text-align: center;">正在查询...</td></tr>\`; 
             
-            if (!token && !isReadOnly) { 
+            if (!token && authState.role !== 'guest') { 
                 body.innerHTML = \`<tr><td colspan="\${totalCols}" style="color: red; text-align: center;">请先登录或以访客身份查看。</td></tr>\`;
                 return;
             }
 
             try {
-                const response = await fetch(\`\${API_BASE_URL}/materials?q=\${encodeURIComponent(query)}\`, {
+                const response = await fetch(\`\${API_BASE_URL}/materials?\${queryString}\`, {
                     headers: token ? { 'Authorization': 'Bearer ' + token } : {} 
                 });
 
                 if (response.ok) {
                     const materials = await response.json();
-                    renderMaterials(materials);
+                    renderMaterials(materials, isActionsVisible);
                 } else if (response.status === 403 || response.status === 401) {
                     body.innerHTML = \`<tr><td colspan="\${totalCols}" style="color: red; text-align: center;">权限过期，请重新登录。</td></tr>\`;
                     handleLogout();
@@ -809,13 +877,17 @@ const FRONTEND_HTML = `
             }
         }
 
-        function renderMaterials(materials) {
+        function renderMaterials(materials, isActionsVisible) {
             const body = document.getElementById('results-body');
             body.innerHTML = ''; 
-            const totalCols = isReadOnly ? 12 : 13; 
+            const totalCols = isActionsVisible ? 13 : 12; 
+            
+            if (document.getElementById('actions-header')) {
+                document.getElementById('actions-header').style.display = isActionsVisible ? 'table-cell' : 'none';
+            }
 
             if (materials.length === 0) {
-                body.innerHTML = \`<tr><td colspan="\${totalCols}" style="text-align: center;">未找到匹配的材料。</td></tr>\`;
+                body.innerHTML = \`<tr><td colspan="\${totalCols}" style="text-align: center;">未找到匹配的材料\${authState.role === 'supplier' ? '或您公司尚未提供价格。' : '。'}</td></tr>\`;
                 return;
             }
 
@@ -867,21 +939,15 @@ const FRONTEND_HTML = `
                 
                 row.insertCell().textContent = mat.notes || '-';
 
-                if (!isReadOnly) {
+                if (isActionsVisible) {
                     const actionsCell = row.insertCell();
                     actionsCell.innerHTML = \`
                         <button class="edit-btn" onclick='handleEdit(\${safeMaterial})'>编辑</button>
                         <button class="delete-btn" onclick="handleDelete('\${mat.UID}')">删除</button>
                     \`;
                     actionsCell.style.textAlign = 'center';
-                } else {
-                    row.insertCell().style.display = 'none'; 
                 }
             });
-            
-             if (isReadOnly) {
-                 document.getElementById('actions-header').style.display = 'none';
-            }
         }
     </script>
 </body>
@@ -890,14 +956,22 @@ const FRONTEND_HTML = `
 
 // --- Worker 后端逻辑 ---
 
-async function comparePassword(password, storedHash, env) {
-    // 假设您的 D1 数据库中存储的是 'testpass' 
-    return password === storedHash;
-}
-
-function getPublicImageUrl(r2_key, env) {
-    if (!r2_key || !env.R2_PUBLIC_DOMAIN) return null;
-    return `${env.R2_PUBLIC_DOMAIN}/${r2_key}`;
+// --- NEW: JWT 解析器 (获取用户角色和ID) ---
+async function decodeJwt(token, env) {
+    try {
+        const payload = jwt.decode(token);
+        // 验证签名
+        const isValid = await jwt.verify(token, env.JWT_SECRET);
+        if (!isValid) return null;
+        
+        return { 
+            user_id: payload.user_id, 
+            role: payload.role, 
+            supplier_uuid: payload.supplier_uuid || null 
+        };
+    } catch (e) {
+        return null;
+    }
 }
 
 async function authenticate(request, env) {
@@ -907,35 +981,30 @@ async function authenticate(request, env) {
     }
     const token = authHeader.split(' ')[1];
     
-    try {
-        const isValid = await jwt.verify(token, env.JWT_SECRET);
-        if (!isValid) {
-            return { authorized: false, status: 403 };
-        }
-        return { authorized: true };
-    } catch (e) {
+    const decoded = await decodeJwt(token, env);
+
+    if (!decoded) {
         return { authorized: false, status: 403 };
     }
+    
+    // 返回解码后的信息，以便后续 API 使用
+    return { authorized: true, ...decoded };
 }
 
-const ADMIN_ACTIONS = ['POST', 'PUT', 'DELETE'];
-
-function isReadOnlyRequest(method, path) {
-    if (method === 'GET') {
-        return true; 
-    }
-    if (ADMIN_ACTIONS.includes(method)) {
-        return false;
-    }
-    return true; 
+function getPublicImageUrl(r2_key, env) {
+    if (!r2_key || !env.R2_PUBLIC_DOMAIN) return null;
+    return `${env.R2_PUBLIC_DOMAIN}/${r2_key}`;
 }
 
+
+// --- 登录处理 (新增角色检查和密码重置逻辑) ---
 async function handleLogin(request, env) {
     if (!env.DB) {
+        // Fallback admin login (DEV only)
         const { username, password } = await request.json();
         if (username === 'test' && password === 'testpass') {
-             const token = await jwt.sign({ user: 'admin', exp: Math.floor(Date.now() / 1000) + (60 * 60 * 24) }, env.JWT_SECRET);
-             return new Response(JSON.stringify({ token, user_id: 1 }), { 
+             const token = await jwt.sign({ user_id: 1, role: 'admin', exp: Math.floor(Date.now() / 1000) + (60 * 60 * 24) }, env.JWT_SECRET);
+             return new Response(JSON.stringify({ token, user_id: 1, role: 'admin' }), { 
                 headers: { 'Content-Type': 'application/json' } 
              });
         }
@@ -946,7 +1015,7 @@ async function handleLogin(request, env) {
         const { username, password } = await request.json();
         
         const { results: users } = await env.DB.prepare(
-            "SELECT id, password_hash FROM users WHERE username = ?"
+            "SELECT id, password_hash, role, supplier_uuid FROM users WHERE username = ?"
         ).bind(username).all();
 
         if (users.length === 0) {
@@ -955,25 +1024,43 @@ async function handleLogin(request, env) {
         
         const user = users[0];
         
-        // 注意：此处是简化的密码比较，实际生产环境应使用 bcrypt/argon2
-        if (!await comparePassword(password, user.password_hash || 'testpass', env)) { 
+        // 关键：检查密码 (简化处理，实际应使用哈希)
+        if (password !== user.password_hash) { 
              return new Response('Invalid credentials (Password mismatch)', { status: 401 });
         }
-
-        try {
-            const payload = { 
-                user_id: user.id, 
-                exp: Math.floor(Date.now() / 1000) + (60 * 60 * 24)
-            };
-            const token = await jwt.sign(payload, env.JWT_SECRET);
-
-            return new Response(JSON.stringify({ token, user_id: user.id }), { 
-                headers: { 'Content-Type': 'application/json' } 
+        
+        // 关键：检查是否是临时密码
+        if (user.password_hash.startsWith('TEMP_')) {
+            // 可以在此处重定向到密码重置页面，或者直接返回错误状态
+            return new Response(JSON.stringify({ status: 'reset_required', message: 'Temporary password must be changed on first login.' }), { 
+                 headers: { 'Content-Type': 'application/json' } 
             });
-
-        } catch (jwtError) {
-            return new Response('JWT Signing Error. Check JWT_SECRET in wrangler.toml.', { status: 500 });
         }
+
+        let supplier_info = {};
+        if (user.role === 'supplier' && user.supplier_uuid) {
+            const { results: suppliers } = await env.DB.prepare(
+                "SELECT company_name FROM suppliers WHERE supplier_uuid = ?"
+            ).bind(user.supplier_uuid).all();
+            
+            if (suppliers.length > 0) {
+                supplier_info.supplier_uuid = user.supplier_uuid;
+                supplier_info.supplier_company_name = suppliers[0].company_name;
+            }
+        }
+
+        const payload = { 
+            user_id: user.id, 
+            role: user.role, // 关键：在JWT中包含角色
+            supplier_uuid: user.supplier_uuid || undefined,
+            exp: Math.floor(Date.now() / 1000) + (60 * 60 * 24)
+        };
+        const token = await jwt.sign(payload, env.JWT_SECRET);
+
+        return new Response(JSON.stringify({ token, user_id: user.id, role: user.role, ...supplier_info }), { 
+            headers: { 'Content-Type': 'application/json' } 
+        });
+
 
     } catch (e) {
         console.error("Login error:", e.message);
@@ -981,61 +1068,81 @@ async function handleLogin(request, env) {
     }
 }
 
-async function handleDirectUpload(request, env) {
-    const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
 
-    if (!env.R2_MEDIA) {
-        return new Response(JSON.stringify({ 
-            message: 'R2_MEDIA binding is missing. CHECK WRANGLER.TOML and DEPLOYMENT.'
-        }), { status: 500, headers });
-    }
-    
-    if (request.headers.get('Content-Type')?.includes('multipart/form-data') === false) {
-         return new Response(JSON.stringify({ message: 'Missing or wrong Content-Type header. Expected multipart/form-data.' }), { status: 400, headers });
-    }
-
-    try {
-        const formData = await request.formData();
-        const file = formData.get('file'); 
-        const r2Key = formData.get('key'); 
-
-        if (!file || !r2Key || typeof file === 'string') {
-            return new Response(JSON.stringify({ message: 'Missing file or R2 key in form data or file is empty.' }), { status: 400, headers });
-        }
-        
-        await env.R2_MEDIA.put(r2Key, file.stream(), {
-            httpMetadata: { contentType: file.type || 'application/octet-stream' }
-        }); 
-
-        return new Response(JSON.stringify({ 
-            status: 'success', 
-            r2Key: r2Key, 
-            message: `File ${r2Key} uploaded directly to R2.` 
-        }), { headers });
-
-    } catch (e) {
-        console.error("Direct Upload error:", e);
-        return new Response(JSON.stringify({ 
-            message: `Direct upload failed: ${e.message}.`,
-            debug: `R2_MEDIA object type: ${typeof env.R2_MEDIA}. Contains put? ${typeof env.R2_MEDIA?.put}`
-        }), { 
-            status: 500,
-            headers
-        });
-    }
-}
-
-async function handleCreateUpdateMaterial(request, env) {
+// --- NEW: 供应商账户创建 API 处理器 (管理员专用) ---
+async function handleCreateSupplierAccount(request, env) {
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
-
-    const mat = await request.json();
-
-    if (!mat.UID || !mat.unified_name) {
-        return new Response(JSON.stringify({ message: 'Missing required fields: UID and unified_name' }), { status: 400 });
+    const data = await request.json();
+    const { company_name, username } = data;
+    
+    // 权限检查已在 fetch 入口处完成，确保只有 admin 能到达此函数
+    
+    if (!company_name || !username) {
+        return new Response(JSON.stringify({ message: 'Missing required fields: company_name and username.' }), { status: 400 });
     }
 
+    try {
+        // 1. 检查供应商是否已注册
+        const { results: existingSuppliers } = await env.DB.prepare(
+            "SELECT supplier_uuid FROM suppliers WHERE company_name = ?"
+        ).bind(company_name).all();
+
+        if (existingSuppliers.length > 0) {
+            return new Response(JSON.stringify({ message: `Supplier company "${company_name}" already exists (UUID: ${existingSuppliers[0].supplier_uuid}).` }), { status: 409 });
+        }
+
+        // 2. 检查用户名是否已存在 (在 users 表中)
+        const { results: existingUsers } = await env.DB.prepare(
+            "SELECT id FROM users WHERE username = ?"
+        ).bind(username).all();
+        
+        if (existingUsers.length > 0) {
+            return new Response(JSON.stringify({ message: `Username "${username}" already exists.` }), { status: 409 });
+        }
+
+        // 3. 生成 UUID 和临时密码
+        const supplier_uuid = uuidv4(); 
+        const temporary_password = 'TEMP_' + generateRandomPassword(12); // 使用 TEMP_ 前缀标识临时密码
+
+        // 4. 插入 suppliers 表
+        await env.DB.prepare(
+            "INSERT INTO suppliers (supplier_uuid, company_name) VALUES (?, ?)"
+        ).bind(supplier_uuid, company_name).run();
+
+        // 5. 插入 users 表 (绑定 supplier_uuid)
+        await env.DB.prepare(
+            "INSERT INTO users (username, password_hash, role, supplier_uuid) VALUES (?, ?, ?, ?)"
+        ).bind(username, temporary_password, 'supplier', supplier_uuid).run();
+
+
+        return new Response(JSON.stringify({ 
+            status: 'success', 
+            message: 'Supplier and user registered successfully.', 
+            supplier_uuid,
+            username,
+            password: temporary_password // ⚠️ 返回给管理员，管理员告知供应商
+        }), {
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+    } catch (e) {
+        console.error("Supplier Creation error:", e);
+        return new Response(JSON.stringify({ message: `Creation Failed: ${e.message}` }), { status: 500 });
+    }
+}
+// --- END NEW ---
+
+
+// --- 材料 CRUD / R2 上传 / 批量导入 (只允许 Admin) ---
+async function handleCreateUpdateMaterial(request, env, auth) {
+    if (auth.role !== 'admin') return new Response('Permission denied. Only Admins can modify material records.', { status: 403 });
+    // ... (保持 V5 的逻辑不变) ...
+    // (此处省略代码以保持简洁，但 V6 Worker.js 中将包含完整的 V5 逻辑)
+    if (!env.DB) return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
+    const mat = await request.json();
+    if (!mat.UID || !mat.unified_name) return new Response(JSON.stringify({ message: 'Missing required fields: UID and unified_name' }), { status: 400 });
     try {
         const stmt = env.DB.prepare(`
             INSERT OR REPLACE INTO materials 
@@ -1044,53 +1151,134 @@ async function handleCreateUpdateMaterial(request, env) {
         `).bind(
             mat.UID, mat.unified_name, mat.material_type, mat.sub_category, mat.model_number, 
             mat.length_mm, mat.width_mm, mat.diameter_mm, 
-            mat.color,
-            mat.notes || null, 
-            mat.alias,
-            mat.r2_image_key || null,
-            mat.unit || null 
+            mat.color, mat.notes || null, mat.alias, mat.r2_image_key || null, mat.unit || null 
         );
-
         await stmt.run();
-
-        return new Response(JSON.stringify({ status: 'success', message: 'Material saved/updated.', uid: mat.UID }), {
-            headers: { 'Content-Type': 'application/json' }
-        });
-
+        return new Response(JSON.stringify({ status: 'success', message: 'Material saved/updated.', uid: mat.UID }), { headers: { 'Content-Type': 'application/json' } });
     } catch (e) {
         console.error("Save/Update error:", e);
         return new Response(JSON.stringify({ message: `Save/Update Failed: ${e.message}` }), { status: 500 });
     }
 }
 
-// --- UPDATED: 供应商价格更新 API 处理器 (使用 UUID) ---
+async function handleDirectUpload(request, env, auth) {
+    if (auth.role !== 'admin') return new Response('Permission denied. Only Admins can upload files.', { status: 403 });
+    // ... (保持 V5 的逻辑不变) ...
+    // (此处省略代码以保持简洁，但 V6 Worker.js 中将包含完整的 V5 逻辑)
+    const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
+    if (!env.R2_MEDIA) return new Response(JSON.stringify({ message: 'R2_MEDIA binding is missing.' }), { status: 500, headers });
+    if (request.headers.get('Content-Type')?.includes('multipart/form-data') === false) return new Response(JSON.stringify({ message: 'Expected multipart/form-data.' }), { status: 400, headers });
+    try {
+        const formData = await request.formData();
+        const file = formData.get('file'); 
+        const r2Key = formData.get('key'); 
+        if (!file || !r2Key || typeof file === 'string') return new Response(JSON.stringify({ message: 'Missing file or R2 key.' }), { status: 400, headers });
+        await env.R2_MEDIA.put(r2Key, file.stream(), { httpMetadata: { contentType: file.type || 'application/octet-stream' } }); 
+        return new Response(JSON.stringify({ status: 'success', r2Key: r2Key, message: `File ${r2Key} uploaded directly to R2.` }), { headers });
+    } catch (e) {
+        console.error("Direct Upload error:", e);
+        return new Response(JSON.stringify({ message: `Direct upload failed: ${e.message}.` }), { status: 500, headers });
+    }
+}
 
-async function handleUpdateSupplierPrice(request, env) {
+async function handleImportMaterials(request, env, auth) {
+    if (auth.role !== 'admin') return new Response('Permission denied. Only Admins can import materials.', { status: 403 });
+    // ... (保持 V5 的逻辑不变) ...
+    // (此处省略代码以保持简洁，但 V6 Worker.js 中将包含完整的 V5 逻辑)
+    if (!env.DB) return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
+    const materials = await request.json(); 
+    if (!Array.isArray(materials) || materials.length === 0) return new Response(JSON.stringify({ status: 'error', message: 'Invalid data format.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+    try {
+        let errorMessages = [];
+        const statements = materials.map(mat => {
+            if (!mat.UID) { errorMessages.push(`Missing UID for material: ${mat.unified_name || 'unknown'}`); return null; }
+            return env.DB.prepare(`
+                INSERT OR REPLACE INTO materials 
+                (UID, unified_name, material_type, sub_category, model_number, length_mm, width_mm, diameter_mm, color, notes, alias, r2_image_key, unit)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).bind(
+                mat.UID, mat.unified_name, mat.material_type, mat.sub_category, mat.model_number, 
+                parseFloat(mat.length_mm) || null, parseFloat(mat.width_mm) || null, parseFloat(mat.diameter_mm) || null,
+                mat.color, mat.notes || null, mat.alias, mat.r2_image_key || null, mat.unit || null 
+            );
+        }).filter(stmt => stmt !== null);
+        if (statements.length > 0) await env.DB.batch(statements);
+        return new Response(JSON.stringify({ status: 'success', total_processed: materials.length, imported_count: statements.length, errors: errorMessages }), { headers: { 'Content-Type': 'application/json' } });
+    } catch (e) {
+        console.error("Import error:", e);
+        return new Response(JSON.stringify({ status: 'error', message: 'Import Failed', errors: [e.message] }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+    }
+}
+
+async function handleDeleteMaterial(request, env, auth) {
+    if (auth.role !== 'admin') return new Response('Permission denied. Only Admins can delete material records.', { status: 403 });
+    // ... (保持 V5 的逻辑不变) ...
+    // (此处省略代码以保持简洁，但 V6 Worker.js 中将包含完整的 V5 逻辑)
+    if (!env.DB) return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
+    const url = new URL(request.url);
+    const parts = url.pathname.split('/');
+    const uid = parts[parts.length - 1]; 
+    if (!uid) return new Response(JSON.stringify({ message: 'Missing Material UID' }), { status: 400 });
+    try {
+        const result = await env.DB.prepare("DELETE FROM materials WHERE UID = ?").bind(uid).run();
+        if (result.changes === 0) return new Response(JSON.stringify({ status: 'not found', message: `Material with UID ${uid} not found.` }), { status: 404, headers: { 'Content-Type': 'application/json' } });
+        return new Response(JSON.stringify({ status: 'success', message: `Material ${uid} deleted.` }), { headers: { 'Content-Type': 'application/json' } });
+    } catch (e) {
+        console.error("Delete error:", e);
+        return new Response(JSON.stringify({ message: `Delete Failed: ${e.message}` }), { status: 500 });
+    }
+}
+
+
+// --- 价格更新 (Admin 和 Supplier 都可以，但 Supplier 必须用自己的 UUID) ---
+async function handleUpdateSupplierPrice(request, env, auth) {
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
+    
+    // 权限检查
+    if (auth.role !== 'admin' && auth.role !== 'supplier') {
+        return new Response('Permission denied. Only Admins and Suppliers can update prices.', { status: 403 });
+    }
+
     const data = await request.json();
+    const { material_uid, price_per_unit, currency = 'RMB' } = data;
+    let company_name = data.company_name;
+    let supplier_uuid;
 
-    const { material_uid, company_name, price_per_unit, currency = 'RMB' } = data;
-
-    if (!material_uid || !company_name || typeof price_per_unit !== 'number' || price_per_unit <= 0) {
-        return new Response(JSON.stringify({ message: 'Missing or invalid fields: material_uid, company_name, price_per_unit' }), { status: 400 });
+    if (!material_uid || typeof price_per_unit !== 'number' || price_per_unit <= 0) {
+        return new Response(JSON.stringify({ message: 'Missing or invalid fields: material_uid, price_per_unit' }), { status: 400 });
     }
 
     try {
-        // 1. 查找供应商 (必须先注册)
-        let supplier_uuid;
-        const { results: existingSuppliers } = await env.DB.prepare(
-            "SELECT supplier_uuid FROM suppliers WHERE company_name = ?"
-        ).bind(company_name).all();
+        if (auth.role === 'supplier') {
+            // 供应商模式：强制使用自己的 UUID
+            supplier_uuid = auth.supplier_uuid;
+            // 获取公司名称（仅用于返回信息）
+            const { results: suppliers } = await env.DB.prepare(
+                "SELECT company_name FROM suppliers WHERE supplier_uuid = ?"
+            ).bind(supplier_uuid).all();
+            if (suppliers.length === 0) {
+                return new Response(JSON.stringify({ message: "Supplier account invalid or not linked to a company." }), { status: 403 });
+            }
+            company_name = suppliers[0].company_name;
 
-        if (existingSuppliers.length === 0) {
-            return new Response(JSON.stringify({ message: `Supplier company "${company_name}" not found. Please register the supplier first.` }), { status: 404 });
+        } else if (auth.role === 'admin') {
+            // 管理员模式：必须提供公司名称，并查找对应的 UUID
+            if (!company_name) {
+                return new Response(JSON.stringify({ message: 'Admin mode requires company_name.' }), { status: 400 });
+            }
+            const { results: existingSuppliers } = await env.DB.prepare(
+                "SELECT supplier_uuid FROM suppliers WHERE company_name = ?"
+            ).bind(company_name).all();
+
+            if (existingSuppliers.length === 0) {
+                return new Response(JSON.stringify({ message: `Supplier company "${company_name}" not found. Please create the account first.` }), { status: 404 });
+            }
+            supplier_uuid = existingSuppliers[0].supplier_uuid;
         }
-        
-        supplier_uuid = existingSuppliers[0].supplier_uuid;
 
-        // 2. 插入或更新价格 (使用 material_uid 和 supplier_uuid 进行联合绑定)
+        // 2. 插入或更新价格
         await env.DB.prepare(`
             INSERT INTO prices (material_uid, supplier_uuid, price_per_unit, currency, last_updated)
             VALUES (?, ?, ?, ?, datetime('now'))
@@ -1116,93 +1304,46 @@ async function handleUpdateSupplierPrice(request, env) {
         return new Response(JSON.stringify({ message: `Price Update Failed: ${e.message}` }), { status: 500 });
     }
 }
-// --- END UPDATED ---
 
 
-// --- NEW: 供应商账户注册 API 处理器 ---
-async function handleRegisterSupplier(request, env) {
-    if (!env.DB) {
-        return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
-    }
-    const data = await request.json();
-    const { company_name, username } = data;
-    
-    if (!company_name || !username) {
-        return new Response(JSON.stringify({ message: 'Missing required fields: company_name and username.' }), { status: 400 });
-    }
-
-    try {
-        // 1. 检查供应商是否已注册
-        const { results: existingSuppliers } = await env.DB.prepare(
-            "SELECT supplier_uuid FROM suppliers WHERE company_name = ?"
-        ).bind(company_name).all();
-
-        if (existingSuppliers.length > 0) {
-            return new Response(JSON.stringify({ message: `Supplier company "${company_name}" already exists (UUID: ${existingSuppliers[0].supplier_uuid}).` }), { status: 409 });
-        }
-
-        // 2. 检查用户名是否已存在 (在 users 表中)
-        const { results: existingUsers } = await env.DB.prepare(
-            "SELECT id FROM users WHERE username = ?"
-        ).bind(username).all();
-        
-        if (existingUsers.length > 0) {
-            return new Response(JSON.stringify({ message: `Username "${username}" already exists.` }), { status: 409 });
-        }
-
-        // 3. 生成 UUID 和密码
-        const supplier_uuid = uuidv4(); 
-        const temporary_password = generateRandomPassword(); // 临时密码
-
-        // 4. 插入 suppliers 表
-        await env.DB.prepare(
-            "INSERT INTO suppliers (supplier_uuid, company_name) VALUES (?, ?)"
-        ).bind(supplier_uuid, company_name).run();
-
-        // 5. 插入 users 表 (假设 users 表结构为 id, username, password_hash, role)
-        // 注意：这里使用临时密码作为 password_hash，实际应使用哈希函数
-        await env.DB.prepare(
-            "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)"
-        ).bind(username, temporary_password, 'supplier').run();
-
-
-        return new Response(JSON.stringify({ 
-            status: 'success', 
-            message: 'Supplier and user registered successfully.', 
-            supplier_uuid,
-            username,
-            password: temporary_password // ⚠️ 实际生产环境不应返回明文密码
-        }), {
-            headers: { 'Content-Type': 'application/json' }
-        });
-
-    } catch (e) {
-        console.error("Supplier Registration error:", e);
-        return new Response(JSON.stringify({ message: `Registration Failed: ${e.message}` }), { status: 500 });
-    }
-}
-// --- END NEW ---
-
-
-// --- 关键更新：使用 CTE (WITH) 和 Window Function 实现稳定查询 ---
+// --- 材料查询 (Admin/Guest 查所有最低价，Supplier 查自己的) ---
 async function handleQueryMaterials(request, env) {
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
     }
+    
+    // 尝试获取授权信息 (即便失败也要继续，因为访客/无登录也能查)
+    const authResult = await authenticate(request, env); 
+    const role = authResult.role || 'guest';
+
     try {
         const url = new URL(request.url);
         const query = url.searchParams.get('q') || '';
+        const searchPattern = `%${query}%`;
         
-        let stmt;
+        let filterClause = '';
+        let filterBinds = [];
         
-        // 使用 CTE (Common Table Expression) 和 Window Function 查找每个材料的最低价格
+        // 关键：供应商视图过滤
+        if (role === 'supplier' && authResult.supplier_uuid) {
+            // 供应商只能看到他们有报价的材料
+            filterClause = `
+                m.UID IN (
+                    SELECT DISTINCT material_uid 
+                    FROM prices 
+                    WHERE supplier_uuid = ?
+                )
+            `;
+            filterBinds.push(authResult.supplier_uuid);
+        }
+        
+        // 构建查询 (包含最低价逻辑)
         const baseQuery = `
             WITH RankedPrices AS (
                 SELECT 
                     material_uid, 
                     price_per_unit,
                     currency,
-                    -- 给每个材料的价格进行排名，最低价 (ASC) 且最新 (DESC) 的排名为 1
                     ROW_NUMBER() OVER (
                         PARTITION BY material_uid 
                         ORDER BY price_per_unit ASC, last_updated DESC
@@ -1216,19 +1357,39 @@ async function handleQueryMaterials(request, env) {
             FROM materials m
             LEFT JOIN RankedPrices r ON m.UID = r.material_uid AND r.rn = 1
         `;
+        
+        // 添加搜索和角色过滤
+        let finalQuery = baseQuery;
+        let binds = [];
+        
+        let whereClauses = [];
+        let searchBinds = [];
 
         if (query) {
-            const searchPattern = `%${query}%`;
-            stmt = env.DB.prepare(`
-                ${baseQuery}
-                WHERE m.UID LIKE ? OR m.unified_name LIKE ? 
-                   OR m.alias LIKE ? OR m.sub_category LIKE ? OR m.model_number LIKE ? OR m.notes LIKE ? OR m.unit LIKE ? 
-                LIMIT 100
-            `).bind(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern); 
-        } else {
-            stmt = env.DB.prepare(`${baseQuery} LIMIT 100`);
+             // 搜索条件
+            whereClauses.push(`
+                (m.UID LIKE ? OR m.unified_name LIKE ? 
+                OR m.alias LIKE ? OR m.sub_category LIKE ? OR m.model_number LIKE ? 
+                OR m.notes LIKE ? OR m.unit LIKE ?)
+            `);
+            for(let i=0; i<7; i++) searchBinds.push(searchPattern);
+        }
+
+        if (filterClause) {
+            // 角色过滤条件
+            whereClauses.push(filterClause);
+            binds.push(...filterBinds);
+        }
+
+        if (whereClauses.length > 0) {
+            finalQuery += ` WHERE ${whereClauses.join(' AND ')}`;
         }
         
+        binds.unshift(...searchBinds); // 确保搜索参数在前
+
+        finalQuery += ` LIMIT 100`;
+
+        const stmt = env.DB.prepare(finalQuery).bind(...binds);
         const { results } = await stmt.all();
 
         const materialsWithUrls = results.map(mat => {
@@ -1249,107 +1410,7 @@ async function handleQueryMaterials(request, env) {
 
     } catch (e) {
         console.error("Query error:", e);
-        // 如果表不存在，会返回 D1_ERROR
-        return new Response(JSON.stringify({ message: `Database Query Failed: ${e.message}`, debug: "Please ensure D1 migration 0002 has been applied correctly." }), { status: 500 });
-    }
-}
-// --- END 关键更新 ---
-
-
-async function handleImportMaterials(request, env) {
-    if (!env.DB) {
-        return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
-    }
-    if (request.method !== 'POST') return new Response('Method Not Allowed', { status: 405 });
-    
-    const materials = await request.json(); 
-    
-    if (!Array.isArray(materials) || materials.length === 0) {
-        return new Response(JSON.stringify({ 
-            status: 'error', 
-            message: 'Invalid data format. Expected array of materials.',
-            errors: ['Invalid data format. Expected array of materials.']
-        }), { status: 400, headers: { 'Content-Type': 'application/json' } });
-    }
-
-    try {
-        let errorMessages = [];
-        
-        const statements = materials.map(mat => {
-            if (!mat.UID) {
-                errorMessages.push(`Missing UID for material: ${mat.unified_name || 'unknown'}`);
-                return null;
-            }
-            return env.DB.prepare(`
-                INSERT OR REPLACE INTO materials 
-                (UID, unified_name, material_type, sub_category, model_number, length_mm, width_mm, diameter_mm, color, notes, alias, r2_image_key, unit)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `).bind(
-                mat.UID, mat.unified_name, mat.material_type, mat.sub_category, mat.model_number, 
-                parseFloat(mat.length_mm) || null, 
-                parseFloat(mat.width_mm) || null,
-                parseFloat(mat.diameter_mm) || null,
-                mat.color,
-                mat.notes || null,
-                mat.alias,
-                mat.r2_image_key || null,
-                mat.unit || null 
-            );
-        }).filter(stmt => stmt !== null);
-        
-        if (statements.length > 0) {
-            await env.DB.batch(statements);
-        }
-
-        return new Response(JSON.stringify({ 
-            status: 'success', 
-            total_processed: materials.length,
-            imported_count: statements.length, 
-            errors: errorMessages 
-        }), {
-            headers: { 'Content-Type': 'application/json' }
-        });
-
-    } catch (e) {
-        console.error("Import error:", e);
-        return new Response(JSON.stringify({ 
-            status: 'error', 
-            message: 'Import Failed',
-            errors: [e.message]
-        }), { status: 500, headers: { 'Content-Type': 'application/json' } });
-    }
-}
-
-
-async function handleDeleteMaterial(request, env) {
-    if (!env.DB) {
-        return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
-    }
-    const url = new URL(request.url);
-    const parts = url.pathname.split('/');
-    const uid = parts[parts.length - 1]; 
-
-    if (!uid) {
-        return new Response(JSON.stringify({ message: 'Missing Material UID' }), { status: 400 });
-    }
-
-    try {
-        // 删除材料记录，由于外键约束，关联的价格记录也会被删除
-        const result = await env.DB.prepare("DELETE FROM materials WHERE UID = ?").bind(uid).run();
-        
-        if (result.changes === 0) {
-            return new Response(JSON.stringify({ status: 'not found', message: `Material with UID ${uid} not found.` }), { 
-                status: 404, 
-                headers: { 'Content-Type': 'application/json' }
-            });
-        }
-
-        return new Response(JSON.stringify({ status: 'success', message: `Material ${uid} deleted.` }), { 
-            headers: { 'Content-Type': 'application/json' }
-        });
-    } catch (e) {
-        console.error("Delete error:", e);
-        return new Response(JSON.stringify({ message: `Delete Failed: ${e.message}` }), { status: 500 });
+        return new Response(JSON.stringify({ message: `Database Query Failed: ${e.message}`, debug: "Please ensure all D1 migrations (0001, 0002) have been applied correctly." }), { status: 500 });
     }
 }
 
@@ -1381,46 +1442,54 @@ export default {
             return handleLogin(request, env);
         }
         
-        if (path.startsWith('/api/')) {
-            
-            if (isReadOnlyRequest(method, path)) {
-                if (path === '/api/materials' && method === 'GET') {
-                    return handleQueryMaterials(request, env);
-                }
-            }
+        if (path === '/api/materials' && method === 'GET') {
+             return handleQueryMaterials(request, env); 
+        }
 
+        if (path.startsWith('/api/')) {
             const authResult = await authenticate(request, env); 
+
             if (!authResult.authorized) {
-                if (method === 'GET') {
-                    return new Response('Not Found or Unauthorized', { status: 404, headers });
-                }
                 return new Response('Authentication Required for this action', { status: 401, headers });
             }
             
-            // NEW: 供应商账户注册 API
-            if (path === '/api/suppliers/register' && method === 'POST') {
-                return handleRegisterSupplier(request, env);
+            // 供应商账户创建 (管理员专用)
+            if (path === '/api/suppliers/create' && method === 'POST') {
+                if (authResult.role !== 'admin') return new Response('Only Admin can create supplier accounts.', { status: 403, headers });
+                return handleCreateSupplierAccount(request, env, authResult);
             }
             
-            // 价格管理 API
+            // 价格管理 (管理员和供应商)
             if (path === '/api/prices' && method === 'POST') {
-                return handleUpdateSupplierPrice(request, env);
+                return handleUpdateSupplierPrice(request, env, authResult);
             }
             
+            // --- 管理员专用 API ---
+            if (authResult.role !== 'admin') {
+                 // 阻止非管理员访问以下路径
+                 if (path.startsWith('/api/materials/') || path === '/api/materials' || path === '/api/upload' || path === '/api/import') {
+                    return new Response(`Permission denied. Role: ${authResult.role}`, { status: 403, headers });
+                }
+            }
+
+            // 材料删除 (管理员)
             if (path.startsWith('/api/materials/') && method === 'DELETE') {
-                return handleDeleteMaterial(request, env); 
+                return handleDeleteMaterial(request, env, authResult); 
             }
 
+            // 材料新增/修改 (管理员)
             if (path === '/api/materials' && method === 'POST') {
-                 return handleCreateUpdateMaterial(request, env); 
+                 return handleCreateUpdateMaterial(request, env, authResult); 
             }
             
+            // 文件上传 (管理员)
             if (path === '/api/upload' && method === 'POST') {
-                return handleDirectUpload(request, env); 
+                return handleDirectUpload(request, env, authResult); 
             }
 
+            // 批量导入 (管理员)
             if (path === '/api/import' && method === 'POST') {
-                return handleImportMaterials(request, env); 
+                return handleImportMaterials(request, env, authResult); 
             }
         }
 
