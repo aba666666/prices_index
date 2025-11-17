@@ -892,7 +892,7 @@ function getPublicImageUrl(key, env) {
     if (!key || !env.R2_PUBLIC_DOMAIN) return null;
     // 确保 URL 规范性
     const domain = env.R2_PUBLIC_DOMAIN.endsWith('/') ? env.R2_PUBLIC_DOMAIN : env.R2_PUBLIC_DOMAIN + '/';
-    return \`\${domain}\${key}\`;
+    return `${domain}\${key}`;
 }
 
 
@@ -1076,7 +1076,7 @@ async function handleCreateUpdateMaterial(request, env) {
         }
 
         const isNew = !material.UID;
-        const UID = isNew ? \`M-\${crypto.randomUUID().substring(0, 8).toUpperCase()}\` : material.UID;
+        const UID = isNew ? `M-\${crypto.randomUUID().substring(0, 8).toUpperCase()}` : material.UID;
         const currentTimestamp = new Date().toISOString();
         
         // 注意：这里没有设置 supplier_uuid，需要管理员手动分配
@@ -1152,7 +1152,7 @@ async function handleDirectUpload(request, env) {
         }
 
         // 使用 UUID 作为 Key，确保唯一性
-        const fileKey = \`image-\${crypto.randomUUID()}\`;
+        const fileKey = `image-\${crypto.randomUUID()}`;
 
         await env.R2_MEDIA.put(fileKey, file.stream());
 
@@ -1208,7 +1208,7 @@ async function handleImportMaterials(request, env) {
             if (material.UID) {
                 isUpdate = true;
             } else {
-                 material.UID = \`M-\${crypto.randomUUID().substring(0, 8).toUpperCase()}\`;
+                 material.UID = `M-\${crypto.randomUUID().substring(0, 8).toUpperCase()}`;
             }
 
             const stmt = env.DB.prepare(`
