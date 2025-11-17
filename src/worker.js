@@ -1,4 +1,4 @@
-// src/worker.js - V3 增强版 (已集成供应商 UUID 绑定)
+// src/worker.js - V4 稳定版 (已重构查询逻辑，解决 Database Query Failed 错误)
 
 import * as jwt from '@tsndr/cloudflare-worker-jwt';
 
@@ -420,7 +420,7 @@ const FRONTEND_HTML = `
             }
         }
         
-        // --- 3. 价格更新 (已更新逻辑，后端使用 UUID 绑定) ---
+        // --- 3. 价格更新 ---
         async function handlePriceUpdate() {
             if (isReadOnly) return alert('访客模式下禁止操作。');
             const token = localStorage.getItem('jwtToken');
@@ -777,6 +777,7 @@ const FRONTEND_HTML = `
                 row.insertCell().textContent = mat.UID;
                 
                 const priceCell = row.insertCell();
+                // 关键更新：直接使用 lowest_price_per_unit 字段
                 if (mat.lowest_price_per_unit) {
                      priceCell.innerHTML = \`\${mat.lowest_price_per_unit.toFixed(2)} <span style="font-size: 0.8em; color: #6c757d;">\${mat.price_currency || ''}</span>\`;
                      priceCell.style.fontWeight = 'bold';
@@ -1042,6 +1043,7 @@ async function handleUpdateSupplierPrice(request, env) {
 // --- END UPDATED ---
 
 
+// --- 关键更新：使用 CTE (WITH) 和 Window Function 实现稳定查询 ---
 async function handleQueryMaterials(request, env) {
     if (!env.DB) {
         return new Response(JSON.stringify({ message: 'DB binding is missing.' }), { status: 500 });
@@ -1052,18 +1054,26 @@ async function handleQueryMaterials(request, env) {
         
         let stmt;
         
-        // 查询语句修改：prices 表现在使用 supplier_uuid 而非 supplier_id 绑定
+        // 使用 CTE (Common Table Expression) 和 Window Function 查找每个材料的最低价格
         const baseQuery = `
+            WITH RankedPrices AS (
+                SELECT 
+                    material_uid, 
+                    price_per_unit,
+                    currency,
+                    -- 给每个材料的价格进行排名，最低价 (ASC) 且最新 (DESC) 的排名为 1
+                    ROW_NUMBER() OVER (
+                        PARTITION BY material_uid 
+                        ORDER BY price_per_unit ASC, last_updated DESC
+                    ) AS rn
+                FROM prices
+            )
             SELECT 
                 m.*,
-                (
-                    SELECT p.price_per_unit || '|' || p.currency
-                    FROM prices p
-                    WHERE p.material_uid = m.UID
-                    ORDER BY p.price_per_unit ASC
-                    LIMIT 1
-                ) AS lowest_price_info
+                r.price_per_unit AS lowest_price_per_unit,
+                r.currency AS price_currency
             FROM materials m
+            LEFT JOIN RankedPrices r ON m.UID = r.material_uid AND r.rn = 1
         `;
 
         if (query) {
@@ -1081,19 +1091,15 @@ async function handleQueryMaterials(request, env) {
         const { results } = await stmt.all();
 
         const materialsWithUrls = results.map(mat => {
-            let lowest_price_per_unit = null;
-            let currency = null;
-            if (mat.lowest_price_info) {
-                 const [priceStr, currStr] = mat.lowest_price_info.split('|');
-                 lowest_price_per_unit = parseFloat(priceStr);
-                 currency = currStr;
-            }
+            // 直接使用 JOIN 带来的两个字段
+            const lowest_price_per_unit = mat.lowest_price_per_unit ? parseFloat(mat.lowest_price_per_unit) : null; 
+            const currency = mat.price_currency || null; 
             
             return {
                 ...mat,
                 image_url: getPublicImageUrl(mat.r2_image_key, env),
-                lowest_price_per_unit: lowest_price_per_unit, 
-                price_currency: currency 
+                lowest_price_per_unit: lowest_price_per_unit, // 注意：这里是 REAL 类型，在 JS 中是 Number
+                price_currency: currency // 确保是 string
             }
         });
 
@@ -1103,9 +1109,11 @@ async function handleQueryMaterials(request, env) {
 
     } catch (e) {
         console.error("Query error:", e);
-        return new Response(JSON.stringify({ message: 'Database Query Failed' }), { status: 500 });
+        // 捕获到错误时，返回详细信息以便调试
+        return new Response(JSON.stringify({ message: `Database Query Failed: ${e.message}`, debug: "Please ensure D1 migration 0002 has been applied correctly." }), { status: 500 });
     }
 }
+// --- END 关键更新 ---
 
 
 async function handleImportMaterials(request, env) {
