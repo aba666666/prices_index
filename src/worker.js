@@ -323,7 +323,7 @@ const FRONTEND_HTML = `
             status.style.color = 'blue';
 
             try {
-                const response = await fetch(`${API_BASE_URL}/materials`, {
+                const response = await fetch(\`\${API_BASE_URL}/materials\`, {
                     method: 'POST',
                     headers: getAuthHeaders(),
                     body: JSON.stringify(data)
