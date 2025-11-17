@@ -637,7 +637,7 @@ const FRONTEND_HTML = `
             }
 
             try {
-                // 修复了语法错误: 确保 fetch 的 options 参数在大括号 {} 内，且用逗号与 URL 分隔
+                // ✅ 修复后的 fetch 调用：确保 URL 和 options 对象之间用逗号 (,) 分隔，而不是在 URL 后面提前关闭括号
                 const response = await fetch(`${API_BASE_URL}/materials?q=${encodeURIComponent(query)}`, {
                     headers: token ? { 'Authorization': 'Bearer ' + token } : {} 
                 });
